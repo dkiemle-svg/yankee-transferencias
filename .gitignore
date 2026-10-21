@@ -1,0 +1,8 @@
+node_modules
+dist
+dist-demo
+.env
+.env.local
+# dados reais da planilha — não versionar (o repositório do GitHub Pages costuma ser público)
+src/lib/seed.json
+supabase/seed.sql
