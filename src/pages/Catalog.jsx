@@ -20,12 +20,12 @@ export default function Catalog({ store }) {
         <div className="seg subtabs" role="tablist">
           <button aria-pressed={sub === 'produtos'} onClick={() => setSub('produtos')}><Package size={14} style={{ verticalAlign: -2, marginRight: 6 }} />Produtos</button>
           <button aria-pressed={sub === 'unidades'} onClick={() => setSub('unidades')}><Building2 size={14} style={{ verticalAlign: -2, marginRight: 6 }} />Unidades</button>
-          <button aria-pressed={sub === 'usuarios'} onClick={() => setSub('usuarios')}><Users size={14} style={{ verticalAlign: -2, marginRight: 6 }} />Usuários</button>
+          {store.isMaster && <button aria-pressed={sub === 'usuarios'} onClick={() => setSub('usuarios')}><Users size={14} style={{ verticalAlign: -2, marginRight: 6 }} />Usuários</button>}
         </div>
       )}
       {sub === 'produtos' && <Products store={store} />}
       {sub === 'unidades' && isAdmin && <Units store={store} />}
-      {sub === 'usuarios' && isAdmin && <UsersAdmin store={store} />}
+      {sub === 'usuarios' && store.isMaster && <UsersAdmin store={store} />}
     </>
   )
 }
@@ -236,7 +236,7 @@ function UsersAdmin({ store }) {
   return (
     <div className="card">
       <div className="card-head" style={{ paddingBottom: 14 }}>
-        <div><h3>Equipe com acesso</h3><p>Cada pessoa cria a própria conta na tela de login; aqui você define o perfil e a unidade.{pending ? ` ${pending} aguardando liberação.` : ''}</p></div>
+        <div><h3>Equipe com acesso</h3><p>Toda conta nova entra sem acesso a nada. Só um master libera, escolhendo o perfil (e a unidade, para o delivery).{pending ? ` ${pending} aguardando liberação.` : ''}</p></div>
       </div>
       <div className="table-wrap">
         <table className="data">

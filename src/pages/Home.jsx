@@ -1,5 +1,6 @@
-import React, { useMemo } from 'react'
-import { ArrowRight, Lock, Plus } from 'lucide-react'
+import React, { useEffect, useMemo, useState } from 'react'
+import { ArrowRight, Lock, Plus, UserPlus } from 'lucide-react'
+import { api, DEMO } from '../lib/api.js'
 import { money, dateBR, today, addDays, weekStart } from '../lib/format.js'
 import { isOverdue } from '../lib/nutri.js'
 
@@ -8,6 +9,11 @@ const greeting = () => { const h = new Date().getHours(); return h < 12 ? 'Bom d
 export default function Home({ store, panels }) {
   const { profile, allowed, transfers, nutri, isMaster } = store
   const first = (profile?.name || '').split(' ')[0]
+  const [waiting, setWaiting] = useState(0)
+  useEffect(() => {
+    if (!isMaster || DEMO) return
+    api.profiles().then((l) => setWaiting(l.filter((p) => p.role === 'pending').length)).catch(() => {})
+  }, [isMaster])
 
   const stats = useMemo(() => {
     const out = {}
@@ -44,6 +50,13 @@ export default function Home({ store, panels }) {
         <h1>{greeting()}{first ? `, ${first}` : ''}.</h1>
         <p className="muted">{visible.length > 1 ? 'Escolha um painel para começar.' : 'Este é o seu painel.'}</p>
       </div>
+
+      {waiting > 0 && (
+        <button className="note warn waiting-note" onClick={() => store.go('cadastros')}>
+          <UserPlus size={16} />
+          <span><strong>{waiting} conta{waiting > 1 ? 's' : ''} aguardando liberação.</strong> Ninguém tem acesso até você liberar em Cadastros → Usuários.</span>
+        </button>
+      )}
 
       <div className="panel-grid">
         {visible.map((p) => {
