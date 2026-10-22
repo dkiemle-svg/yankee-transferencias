@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeftRight, LayoutDashboard, Package, LogOut, Moon, Sun, KeyRound, ClipboardList, ListChecks, Users, Trophy, Home as HomeIcon, Salad } from 'lucide-react'
+import { ArrowLeftRight, LayoutDashboard, Package, LogOut, Moon, Sun, KeyRound, ClipboardList, ListChecks, Users, Trophy, Home as HomeIcon, Salad, FileChartColumn } from 'lucide-react'
 import { api, DEMO } from './lib/api.js'
 import { ToastProvider, ConfirmProvider, Modal, useToast } from './components/ui.jsx'
 import Login from './pages/Login.jsx'
@@ -27,6 +27,7 @@ export const PANELS = [
       { id: 'nutri-relatorios', label: 'Relatórios', icon: ClipboardList },
       { id: 'nutri-acoes', label: 'Ações', icon: ListChecks },
       { id: 'nutri-equipe', label: 'Equipe', icon: Users },
+      { id: 'nutri-entrega', label: 'Relatório da equipe', icon: FileChartColumn },
       { id: 'nutri-ranking', label: 'Ranking e metas', icon: Trophy },
     ],
   },
