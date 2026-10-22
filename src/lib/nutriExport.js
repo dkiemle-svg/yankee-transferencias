@@ -19,7 +19,7 @@ export async function exportNutriPDF(sections, periodLabel) {
     doc.setFont('helvetica', 'normal'); doc.setFontSize(11); doc.setTextColor(100)
     doc.text(`${emp.role || ''} · ${UNIT_NAMES[emp.unit] || ''} · ${periodLabel}`, M, 92)
     doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.setTextColor(score.score >= 0 ? 0 : 180, score.score >= 0 ? 110 : 60, 0)
-    doc.text(`${score.score > 0 ? '+' : ''}${score.score} pts`, W - M, 72, { align: 'right' })
+    doc.text(`${score.score > 0 ? '+' : ''}${String(score.score).replace('.', ',')} pts`, W - M, 72, { align: 'right' })
     y = 124
 
     const section = (title, color, items, render) => {
