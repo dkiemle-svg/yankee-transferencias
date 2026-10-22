@@ -14,26 +14,28 @@ alter table profiles drop constraint if exists profiles_role_check;
 alter table profiles add constraint profiles_role_check check (role in ('admin','hub','pending','nutri'));
 
 update profiles set master = true, role = 'admin'
- where lower(email) in ('danielkiemle@yankeeburger.com.br','raquel@yankeeburger.com.br','henrique@yankeeburger.com.br');
+ where lower(email) in ('danielkiemle@yankeeburger.com.br','henrique@yankeeburger.com.br');
+-- Raquel: administrativo com acesso só ao painel Transferências
+update profiles set master = false, role = 'admin', access = '{transferencias}'
+ where lower(email) = 'raquel@yankeeburger.com.br';
 
--- Usuários reservados: masters e a nutricionista
+-- Usuários reservados: masters, Raquel (Transferências) e a nutricionista
 create or replace function handle_new_user() returns trigger
 language plpgsql security definer set search_path = public as $$
 declare
   usr text := lower(new.email);
   masters jsonb := '{"danielkiemle@yankeeburger.com.br": "Daniel Kiemle",
-                     "raquel@yankeeburger.com.br": "Raquel",
                      "henrique@yankeeburger.com.br": "Henrique"}';
 begin
   insert into profiles (id, email, name, role, master, access)
   values (
     new.id,
     new.email,
-    coalesce(masters->>usr, case when usr = 'rebeca@yankeeburger.com.br' then 'Rebeca' end,
+    coalesce(masters->>usr, case usr when 'rebeca@yankeeburger.com.br' then 'Rebeca' when 'raquel@yankeeburger.com.br' then 'Raquel' end,
              nullif(new.raw_user_meta_data->>'name', ''), split_part(usr, '@', 1)),
-    case when masters ? usr then 'admin' when usr = 'rebeca@yankeeburger.com.br' then 'nutri' else 'pending' end,
+    case when masters ? usr or usr = 'raquel@yankeeburger.com.br' then 'admin' when usr = 'rebeca@yankeeburger.com.br' then 'nutri' else 'pending' end,
     masters ? usr,
-    case when usr = 'rebeca@yankeeburger.com.br' then '{nutricao}'::text[] else '{}'::text[] end
+    case usr when 'rebeca@yankeeburger.com.br' then '{nutricao}'::text[] when 'raquel@yankeeburger.com.br' then '{transferencias}'::text[] else '{}'::text[] end
   );
   return new;
 end $$;
@@ -54,6 +56,35 @@ language sql stable security definer set search_path = public as $$
             or (p = 'nutricao' and role = 'nutri'))
   );
 $$;
+
+-- Só um master pode dar ou tirar acesso master / acesso a painéis
+create or replace function guard_profile_access() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is not null and not is_master()
+     and (new.master is distinct from old.master or new.access is distinct from old.access) then
+    raise exception 'Só um usuário master pode alterar o acesso aos painéis.';
+  end if;
+  return new;
+end $$;
+drop trigger if exists profiles_guard_access on profiles;
+create trigger profiles_guard_access before update on profiles
+  for each row execute function guard_profile_access();
+
+-- Redefinir senha: quem não é master não mexe na senha de masters nem da nutricionista
+create or replace function admin_set_password(target uuid, new_password text) returns void
+language plpgsql security definer set search_path = public, extensions, auth as $$
+begin
+  if not is_admin() then raise exception 'Somente o administrativo pode redefinir senhas'; end if;
+  if not is_master() and exists (select 1 from profiles where id = target and (master or role = 'nutri')) then
+    raise exception 'Só um usuário master pode redefinir a senha deste usuário';
+  end if;
+  if length(coalesce(new_password, '')) < 6 then raise exception 'A senha precisa ter pelo menos 6 caracteres'; end if;
+  update auth.users
+     set encrypted_password = crypt(new_password, gen_salt('bf')), updated_at = now()
+   where id = target;
+end $$;
+revoke execute on function admin_set_password(uuid, text) from anon;
 
 -- ---------------------------------------------------------------------
 -- Painel Nutrição
