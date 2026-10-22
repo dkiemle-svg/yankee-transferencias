@@ -6,3 +6,5 @@ dist-demo
 # dados reais da planilha — não versionar (o repositório do GitHub Pages costuma ser público)
 src/lib/seed.json
 supabase/seed.sql
+scripts/relatorios_rebeca.txt
+supabase/nutri_seed.sql
