@@ -43,15 +43,13 @@ As regras são aplicadas no próprio banco (Row Level Security), não só na tel
 ## Acessos
 
 - O login é por **usuário e senha** (sem e-mail). Por baixo, o Supabase guarda `usuario@yankeeburger.com.br`.
-- **danielkiemle** e **henrique** são usuários master reservados: ao criar a conta com esse usuário, ela já nasce com acesso total.
-- **raquel** é reservado para o administrativo: acesso total ao painel Transferências (não vê o Nutrição).
-- **rebeca** é reservado para a nutricionista: a conta já nasce com acesso só ao painel Nutrição.
-- Qualquer outra pessoa cria a conta em “Criar conta” e fica aguardando. Um master libera em **Cadastros → Usuários**, escolhendo o perfil e a unidade.
+- **Toda conta nova nasce sem acesso a nada.** Só um master (Daniel, Henrique) libera, em **Cadastros → Usuários** ou direto no Supabase (tabela `profiles`: `role` = admin / hub / nutri, `unit_id` para o delivery).
+- Quem não foi liberado não lê nenhum dado: unidades, produtos, transferências e Nutrição ficam bloqueados no próprio banco.
 - Esqueceu a senha? Um master usa **Cadastros → Usuários → Redefinir senha**. Cada pessoa troca a própria senha pelo ícone de chave no topo.
 
 ## Montar do zero em outro projeto (se precisar)
 
-1. Supabase → SQL Editor: rode `supabase/schema.sql`, `supabase/painel_nutricao.sql` e depois `supabase/seed.sql` (a carga da planilha não fica no GitHub).
+1. Supabase → SQL Editor: rode `supabase/schema.sql`, `supabase/painel_nutricao.sql`, `supabase/seguranca_acessos.sql` e depois `supabase/seed.sql` (a carga da planilha não fica no GitHub).
 2. Supabase → Authentication → Sign In / Providers: desligue **Confirm email**.
 3. Troque URL e chave em `src/config.js`.
 4. GitHub → Settings → Pages → Source: **GitHub Actions**.
