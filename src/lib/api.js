@@ -2,6 +2,7 @@
 // (dados da planilha guardados no navegador) quando não houver credenciais.
 import { createClient } from '@supabase/supabase-js'
 import { round2 } from './format.js'
+import { demoNutri, DEFAULT_SETTINGS } from './nutri.js'
 import { SUPABASE_URL as URL, SUPABASE_KEY as KEY, toEmail } from '../config.js'
 
 export const DEMO = import.meta.env.MODE === 'demo' || !URL || !KEY || URL.startsWith('__')
@@ -86,8 +87,66 @@ function supabaseApi() {
     },
 
     async profiles() { return ok(await sb.from('profiles').select('*').order('created_at')) },
-    async saveProfile(p) { ok(await sb.from('profiles').update({ role: p.role, unit_id: p.unit_id || null, name: p.name }).eq('id', p.id)) },
+    async saveProfile(p) { ok(await sb.from('profiles').update({ role: p.role, unit_id: p.unit_id || null, name: p.name, master: !!p.master, access: p.access || [] }).eq('id', p.id)) },
     async setUserPassword(id, password) { ok(await sb.rpc('admin_set_password', { target: id, new_password: password })) },
+
+    // ----- Painel Nutrição -----
+    async nutriLoad() {
+      const all = async (table, order) => {
+        const out = []
+        for (let from = 0; ; from += 1000) {
+          const page = ok(await sb.from(table).select('*').order(order).range(from, from + 999))
+          out.push(...page); if (page.length < 1000) break
+        }
+        return out
+      }
+      const [employees, reports, points, settings] = await Promise.all([
+        all('nutri_employees', 'name'), all('nutri_reports', 'date'), all('nutri_points', 'created_at'),
+        sb.from('nutri_settings').select('data').eq('id', 1).maybeSingle().then(ok),
+      ])
+      return { employees, reports: await signPhotos(reports), points, settings: { ...DEFAULT_SETTINGS, ...(settings?.data || {}) } }
+    },
+    async nutriSaveEmployee(e) {
+      const { id, ...rest } = e
+      return id ? ok(await sb.from('nutri_employees').update(rest).eq('id', id).select().single())
+                : ok(await sb.from('nutri_employees').insert(rest).select().single())
+    },
+    async nutriDeleteEmployee(id) { ok(await sb.from('nutri_employees').delete().eq('id', id)) },
+    async nutriCreateReport(report, points) {
+      const s = await this.session(); const me = await this.profile()
+      const rid = crypto.randomUUID()
+      const paths = []
+      for (const [i, dataUrl] of (report.photos || []).entries()) {
+        const blob = await (await fetch(dataUrl)).blob()
+        const path = `${rid}/${i + 1}.jpg`
+        ok(await sb.storage.from('nutri-fotos').upload(path, blob, { contentType: 'image/jpeg', upsert: true }))
+        paths.push(path)
+      }
+      const r = ok(await sb.from('nutri_reports').insert({ id: rid, date: report.date, text: report.text, photos: paths, author_id: s.user.id, author_name: me?.name || '' }).select().single())
+      const rows = points.map((p) => ({ report_id: rid, date: report.date, employee_id: p.employee_id || null, type: p.type, sector: p.sector || null, text: p.text, involved: p.involved || [], status: p.type === 'neg' ? 'aberto' : null }))
+      const ps = rows.length ? ok(await sb.from('nutri_points').insert(rows).select()) : []
+      return { report: (await signPhotos([r]))[0], points: ps }
+    },
+    async nutriDeleteReport(id) {
+      const r = ok(await sb.from('nutri_reports').select('photos').eq('id', id).single())
+      if (r.photos?.length) await sb.storage.from('nutri-fotos').remove(r.photos)
+      ok(await sb.from('nutri_reports').delete().eq('id', id))
+    },
+    async nutriUpdatePoint(id, patch) {
+      const p = { ...patch }
+      if (patch.status === 'resolvido') p.resolved_at = new Date().toISOString()
+      if (patch.status === 'aberto') p.resolved_at = null
+      return ok(await sb.from('nutri_points').update(p).eq('id', id).select().single())
+    },
+    async nutriSaveSettings(settings) { ok(await sb.from('nutri_settings').upsert({ id: 1, data: settings })); return settings },
+  }
+
+  async function signPhotos(reports) {
+    const paths = reports.flatMap((r) => r.photos || [])
+    if (!paths.length) return reports.map((r) => ({ ...r, photos: [] }))
+    const { data } = await sb.storage.from('nutri-fotos').createSignedUrls(paths, 60 * 60 * 6)
+    const url = Object.fromEntries((data || []).map((d) => [d.path, d.signedUrl]))
+    return reports.map((r) => ({ ...r, photos: (r.photos || []).map((p) => url[p]).filter(Boolean) }))
   }
 }
 
@@ -95,12 +154,23 @@ function supabaseApi() {
 // Modo demonstração (localStorage)
 // =====================================================================
 function demoApi() {
-  const KEY_DB = 'yankee-demo-db-v3'
+  const KEY_DB = 'yankee-demo-db-v4'
+  const KEY_NUTRI = 'yankee-demo-nutri-v2'
   const KEY_AS = 'yankee-demo-as'
   const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36))
   let db = null
   const save = () => { try { localStorage.setItem(KEY_DB, JSON.stringify(db)) } catch { /* sem storage: mantém em memória */ } }
   const delay = (v) => new Promise((r) => setTimeout(() => r(v), 60))
+  let nutri = null
+  const saveNutri = () => { try { localStorage.setItem(KEY_NUTRI, JSON.stringify(nutri)) } catch { /* fotos grandes podem estourar o espaço; mantém em memória */ } }
+  const loadNutri = () => {
+    if (nutri) return nutri
+    try { const raw = localStorage.getItem(KEY_NUTRI); if (raw) nutri = JSON.parse(raw) } catch { /* */ }
+    if (!nutri) { nutri = demoNutri(); saveNutri() }
+    nutri.settings = { ...DEFAULT_SETTINGS, ...nutri.settings }
+    return nutri
+  }
+  const clone = (x) => JSON.parse(JSON.stringify(x))
 
   async function load() {
     if (db) return db
@@ -123,7 +193,9 @@ function demoApi() {
       notes: t.notes, paid: t.paid, paid_at: null, created_by: 'demo-admin', created_at: new Date(Date.parse(t.date) + i).toISOString(),
     }))
     const profiles = [
-      { id: 'demo-admin', email: 'raquel@yankeeburger.com.br', name: 'Raquel (Administrativo)', role: 'admin', unit_id: null, prefs: {} },
+      { id: 'demo-daniel', email: 'danielkiemle@yankeeburger.com.br', name: 'Daniel Kiemle', role: 'admin', master: true, unit_id: null, prefs: {} },
+      { id: 'demo-rebeca', email: 'rebeca@yankeeburger.com.br', name: 'Rebeca', role: 'nutri', access: ['nutricao'], unit_id: null, prefs: {} },
+      { id: 'demo-admin', email: 'raquel@yankeeburger.com.br', name: 'Raquel', role: 'admin', access: ['transferencias'], unit_id: null, prefs: {} },
       { id: 'demo-zn', email: 'zn@yankeeburger.com.br', name: 'Equipe HubFood ZN', role: 'hub', unit_id: 'u-zn', prefs: {} },
       { id: 'demo-bv', email: 'bv@yankeeburger.com.br', name: 'Equipe HubFood BV', role: 'hub', unit_id: 'u-bv', prefs: {} },
     ]
@@ -131,7 +203,7 @@ function demoApi() {
     save()
     return db
   }
-  const me = () => { let id = 'demo-admin'; try { id = localStorage.getItem(KEY_AS) || id } catch { /* */ } return db.profiles.find((p) => p.id === id) || db.profiles[0] }
+  const me = () => { let id = 'demo-daniel'; try { id = localStorage.getItem(KEY_AS) || id } catch { /* */ } return db.profiles.find((p) => p.id === id) || db.profiles[0] }
   const visible = (t) => { const p = me(); return p.role === 'admin' || t.origin_id === p.unit_id || t.destination_id === p.unit_id }
 
   return {
@@ -140,7 +212,7 @@ function demoApi() {
     onAuth() { return () => {} },
     async signIn() {}, async signUp() {}, async resetPassword() {}, async updatePassword() {}, async signOut() {},
     async viewAs(id) { try { localStorage.setItem(KEY_AS, id) } catch { /* */ } },
-    async resetDemo() { try { localStorage.removeItem(KEY_DB) } catch { /* */ } db = null; await load() },
+    async resetDemo() { try { localStorage.removeItem(KEY_DB); localStorage.removeItem(KEY_NUTRI) } catch { /* */ } db = null; nutri = null; await load() },
 
     async profile() { await load(); return { ...me() } },
     async savePrefs(prefs) { await load(); me().prefs = prefs; save() },
@@ -203,6 +275,30 @@ function demoApi() {
 
     async profiles() { await load(); return db.profiles.map((p) => ({ ...p })) },
     async setUserPassword() {},
+
+    // ----- Painel Nutrição -----
+    async nutriLoad() { await load(); return delay(clone(loadNutri())) },
+    async nutriSaveEmployee(e) {
+      const n = loadNutri()
+      if (e.id) Object.assign(n.employees.find((x) => x.id === e.id), e)
+      else { e = { active: true, ...e, id: uid() }; n.employees.push(e) }
+      saveNutri(); return clone(e)
+    },
+    async nutriDeleteEmployee(id) { const n = loadNutri(); n.employees = n.employees.filter((e) => e.id !== id); n.points.forEach((p) => { if (p.employee_id === id) p.employee_id = null }); saveNutri() },
+    async nutriCreateReport(report, points) {
+      const n = loadNutri()
+      const r = { ...report, id: uid(), author: me().name, created_at: new Date().toISOString() }
+      const ps = points.map((p) => ({ ...p, id: uid(), report_id: r.id, date: r.date, status: p.type === 'neg' ? 'aberto' : null, response: '', due_date: null }))
+      n.reports.push(r); n.points.push(...ps); saveNutri()
+      return clone({ report: r, points: ps })
+    },
+    async nutriDeleteReport(id) { const n = loadNutri(); n.reports = n.reports.filter((r) => r.id !== id); n.points = n.points.filter((p) => p.report_id !== id); saveNutri() },
+    async nutriUpdatePoint(id, patch) {
+      const n = loadNutri(); const p = n.points.find((x) => x.id === id)
+      Object.assign(p, patch); if (patch.status === 'resolvido') p.resolved_at = new Date().toISOString()
+      saveNutri(); return clone(p)
+    },
+    async nutriSaveSettings(settings) { const n = loadNutri(); n.settings = settings; saveNutri(); return clone(settings) },
     async saveProfile(p) { await load(); Object.assign(db.profiles.find((x) => x.id === p.id), { role: p.role, unit_id: p.unit_id || null, name: p.name }); save() },
   }
 }
