@@ -23,10 +23,10 @@ Sistema web para registrar e acompanhar as transferências de produtos da **Yank
 
 | Perfil | Quem | O que pode |
 |---|---|---|
-| **Administrativo** | Raquel | Vê e edita tudo, marca pago/em aberto, cadastra produtos, unidades e libera usuários |
+| **Administrativo** | Raquel | Só o painel Transferências: vê e edita tudo, marca pago/em aberto, cadastra produtos, unidades e libera usuários |
 | **Equipe de delivery** | HubFood ZN / HubFood BV | Vê só as transferências da própria unidade, lança transferências, marca como pago o que **recebeu**, corrige/exclui o que lançou enquanto não estiver pago |
 | **Nutricionista** | Rebeca | Só o painel Nutrição: lança relatórios, cadastra funcionários, gera relatórios para a equipe |
-| **Master** | Daniel, Raquel, Henrique | Todos os painéis; no Nutrição responde ações, define prazo, marca resolvida e configura a meta |
+| **Master** | Daniel, Henrique | Todos os painéis; no Nutrição responde ações, define prazo, marca resolvida e configura a meta |
 | **Sem acesso** | Conta recém-criada | Fica aguardando liberação |
 
 As regras são aplicadas no próprio banco (Row Level Security), não só na tela.
@@ -43,7 +43,8 @@ As regras são aplicadas no próprio banco (Row Level Security), não só na tel
 ## Acessos
 
 - O login é por **usuário e senha** (sem e-mail). Por baixo, o Supabase guarda `usuario@yankeeburger.com.br`.
-- **danielkiemle**, **raquel** e **henrique** são usuários master reservados: ao criar a conta com esse usuário, ela já nasce com acesso total.
+- **danielkiemle** e **henrique** são usuários master reservados: ao criar a conta com esse usuário, ela já nasce com acesso total.
+- **raquel** é reservado para o administrativo: acesso total ao painel Transferências (não vê o Nutrição).
 - **rebeca** é reservado para a nutricionista: a conta já nasce com acesso só ao painel Nutrição.
 - Qualquer outra pessoa cria a conta em “Criar conta” e fica aguardando. Um master libera em **Cadastros → Usuários**, escolhendo o perfil e a unidade.
 - Esqueceu a senha? Um master usa **Cadastros → Usuários → Redefinir senha**. Cada pessoa troca a própria senha pelo ícone de chave no topo.
