@@ -185,15 +185,24 @@ export function parseReport(text, employees) {
 // Pontuação e metas
 // ---------------------------------------------------------------------
 export const DEFAULT_SETTINGS = {
-  weights: { pos: 1, neg: -1, resolved: 0.5 },
+  weights: { pos: 1, neg: -1, resolved: 1 },
   goal: { min_score: 4, max_open: 1, reward: 'Bônus de R$ 150 no mês', active: true },
 }
 
-export function scoreOf(points, weights) {
-  const pos = points.filter((p) => p.type === 'pos').length
-  const neg = points.filter((p) => p.type === 'neg').length
-  const resolved = points.filter((p) => p.type === 'neg' && p.status === 'resolvido').length
-  const open = neg - resolved
+/** Data (local) em que um ponto a melhorar foi resolvido. */
+export const resolvedOn = (p) => (p.status === 'resolvido' ? (p.resolved_at ? toISO(new Date(p.resolved_at)) : p.date) : null)
+const daysBetween = (a, b) => Math.round((new Date(`${b}T12:00:00`) - new Date(`${a}T12:00:00`)) / 86400000)
+
+/**
+ * Pontuação de um período. Resolver um ponto a melhorar conta como ponto positivo
+ * no período em que foi resolvido (mesmo que o apontamento seja de antes).
+ */
+export function scoreOf(points, weights, from = '0000-01-01', to = '9999-12-31') {
+  const inR = (d) => d && d >= from && d <= to
+  const pos = points.filter((p) => p.type === 'pos' && inR(p.date)).length
+  const neg = points.filter((p) => p.type === 'neg' && inR(p.date)).length
+  const resolved = points.filter((p) => p.type === 'neg' && inR(resolvedOn(p))).length
+  const open = points.filter((p) => p.type === 'neg' && p.status !== 'resolvido' && p.date <= to).length
   const score = pos * weights.pos + neg * weights.neg + resolved * weights.resolved
   return { pos, neg, resolved, open, score: Math.round(score * 10) / 10 }
 }
@@ -206,22 +215,75 @@ export const monthRange = (ym) => {
 export const isOverdue = (p) => p.type === 'neg' && p.status !== 'resolvido' && p.due_date && p.due_date < today()
 
 // ---------------------------------------------------------------------
-// Texto para WhatsApp
+// Relatório para a equipe: mapa por pessoa e por setor + listas
 // ---------------------------------------------------------------------
-export function whatsappText(emp, pts, periodLabel) {
-  const pos = pts.filter((p) => p.type === 'pos')
-  const neg = pts.filter((p) => p.type === 'neg')
-  const lines = [`*Relatório da nutrição — ${emp.name}*`, `_${periodLabel}_`, '']
-  lines.push('*O que está bom*')
-  lines.push(...(pos.length ? pos.map((p) => `• ${p.text}`) : ['• Sem registros no período.']))
-  lines.push('', '*O que precisa melhorar*')
-  if (!neg.length) lines.push('• Nada a melhorar no período. Continue assim!')
-  neg.forEach((p) => {
-    lines.push(`• ${p.text}`)
-    if (p.response) lines.push(`   ↳ Combinado: ${p.response}${p.due_date ? ` (até ${p.due_date.split('-').reverse().join('/')})` : ''}`)
-    if (p.status === 'resolvido') lines.push('   ↳ Resolvido ✔')
+export function buildTeamReport(n, { from, to, employeeId = '' }) {
+  const w = n.settings.weights
+  const now = today()
+  const inR = (d) => d && d >= from && d <= to
+  const emp = Object.fromEntries(n.employees.map((e) => [e.id, e]))
+  const pts = n.points.filter((p) => !employeeId || (employeeId === 'geral' ? !p.employee_id : p.employee_id === employeeId))
+  const nameOf = (p) => emp[p.employee_id]?.name || 'Geral / estrutura'
+
+  const positives = pts.filter((p) => p.type === 'pos' && inR(p.date)).sort((a, b) => a.date.localeCompare(b.date))
+  const resolved = pts.filter((p) => p.type === 'neg' && inR(resolvedOn(p)))
+    .map((p) => ({ ...p, resolvedOn: resolvedOn(p), days: Math.max(0, daysBetween(p.date, resolvedOn(p))), old: p.date < from }))
+    .sort((a, b) => a.resolvedOn.localeCompare(b.resolvedOn))
+  const newNeg = pts.filter((p) => p.type === 'neg' && inR(p.date))
+  const pending = pts.filter((p) => p.type === 'neg' && p.status !== 'resolvido' && p.date <= to)
+    .map((p) => ({ ...p, old: p.date < from, age: daysBetween(p.date, now), late: isOverdue(p) }))
+    .sort((a, b) => (b.late - a.late) || a.date.localeCompare(b.date))
+
+  const row = (key, label, sub) => ({ key, label, sub, pos: 0, resolved: 0, neg: 0, pendOld: 0, pendNew: 0, late: 0, score: 0 })
+  const tally = (keyOf, init) => {
+    const map = new Map(init.map((r) => [r.key, r]))
+    const get = (p) => { const k = keyOf(p); if (!map.has(k.key)) map.set(k.key, row(k.key, k.label, k.sub)); return map.get(k.key) }
+    positives.forEach((p) => { get(p).pos++ })
+    resolved.forEach((p) => { get(p).resolved++ })
+    newNeg.forEach((p) => { get(p).neg++ })
+    pending.forEach((p) => { const r = get(p); if (p.old) r.pendOld++; else r.pendNew++; if (p.late) r.late++ })
+    const rows = [...map.values()]
+    rows.forEach((r) => { r.score = Math.round((r.pos * w.pos + r.resolved * w.resolved + r.neg * w.neg) * 10) / 10 })
+    return rows
+  }
+  const people = tally(
+    (p) => (p.employee_id && emp[p.employee_id] ? { key: p.employee_id, label: emp[p.employee_id].name, sub: emp[p.employee_id].role } : { key: 'geral', label: 'Geral / estrutura', sub: 'Pontos sem responsável' }),
+    employeeId ? [] : n.employees.filter((e) => e.active !== false).map((e) => row(e.id, e.name, e.role)),
+  ).sort((a, b) => (a.key === 'geral') - (b.key === 'geral') || b.score - a.score || a.label.localeCompare(b.label))
+  const sectors = tally((p) => ({ key: p.sector || 'Geral', label: p.sector || 'Geral' }), [])
+    .sort((a, b) => (b.pendOld + b.pendNew) - (a.pendOld + a.pendNew) || a.label.localeCompare(b.label))
+
+  return {
+    from, to, nameOf, positives, resolved, newNeg, pending, people, sectors,
+    totals: {
+      pos: positives.length, resolved: resolved.length, neg: newNeg.length,
+      pending: pending.length, pendOld: pending.filter((p) => p.old).length, late: pending.filter((p) => p.late).length,
+    },
+  }
+}
+
+const short = (t, n = 150) => { const s = String(t).replace(/\s+/g, ' ').trim(); return s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s }
+export { short as shortText }
+
+// ---------------------------------------------------------------------
+// Texto para WhatsApp (equipe toda ou uma pessoa)
+// ---------------------------------------------------------------------
+export function whatsappText(r, periodLabel, who = 'Equipe Yankee Burger') {
+  const L = [`*Relatório da nutrição — ${who}*`, `_${periodLabel}_`, '']
+  L.push(`Positivos: ${r.totals.pos} · Resolvidos: ${r.totals.resolved} · Falta resolver: ${r.totals.pending}${r.totals.late ? ` (${r.totals.late} atrasado${r.totals.late > 1 ? 's' : ''})` : ''}`, '')
+  const tag = (p) => (who.startsWith('Equipe') ? `${r.nameOf(p)}: ` : '')
+  L.push('*✔ Resolvido (conta como ponto positivo)*')
+  L.push(...(r.resolved.length ? r.resolved.map((p) => `• ${tag(p)}${short(p.text, 120)}${p.response ? ` → ${short(p.response, 80)}` : ''}`) : ['• Nada resolvido no período.']))
+  L.push('', '*Pontos positivos*')
+  L.push(...(r.positives.length ? r.positives.map((p) => `• ${tag(p)}${short(p.text, 120)}`) : ['• Sem registros no período.']))
+  L.push('', '*Ainda falta resolver*')
+  if (!r.pending.length) L.push('• Nada pendente. Continue assim!')
+  r.pending.forEach((p) => {
+    const info = [`desde ${p.date.split('-').reverse().slice(0, 2).join('/')}`, p.due_date ? `prazo ${p.due_date.split('-').reverse().join('/')}` : null, p.late ? 'ATRASADO' : null].filter(Boolean).join(' · ')
+    L.push(`• ${tag(p)}${short(p.text, 120)} (${info})`)
+    if (p.response) L.push(`   ↳ Combinado: ${short(p.response, 100)}`)
   })
-  return lines.join('\n')
+  return L.join('\n')
 }
 
 // ---------------------------------------------------------------------
@@ -275,7 +337,10 @@ Mari separou os utensílios por cor corretamente.`],
     }))
   })
   // alguns pontos já tratados
-  const set = (match, patch) => { const p = points.find((x) => x.text.includes(match)); if (p) Object.assign(p, patch) }
+  const set = (match, patch) => {
+    const p = points.find((x) => x.text.includes(match))
+    if (p) Object.assign(p, patch, patch.status === 'resolvido' ? { resolved_at: `${patch.due_date || p.date}T15:00:00` } : {})
+  }
   set('esqueceu a touca', { status: 'resolvido', response: 'Conversa com o Carlos e touca reserva no vestiário.', due_date: addDays(today(), -20) })
   set('caixas de papelão', { status: 'resolvido', response: 'Comprar 2 paletes extras para o estoque seco.', due_date: addDays(today(), -12) })
   set('unhas compridas', { status: 'resolvido', response: 'Reforçar regra de unhas no treinamento de admissão.', due_date: addDays(today(), -12) })

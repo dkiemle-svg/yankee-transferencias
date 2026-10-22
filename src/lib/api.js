@@ -123,7 +123,7 @@ function supabaseApi() {
         paths.push(path)
       }
       const r = ok(await sb.from('nutri_reports').insert({ id: rid, date: report.date, text: report.text, photos: paths, author_id: s.user.id, author_name: me?.name || '' }).select().single())
-      const rows = points.map((p) => ({ report_id: rid, date: report.date, employee_id: p.employee_id || null, type: p.type, sector: p.sector || null, text: p.text, involved: p.involved || [], status: p.type === 'neg' ? 'aberto' : null }))
+      const rows = points.map((p) => ({ report_id: rid, date: report.date, employee_id: p.employee_id || null, type: p.type, sector: p.sector || null, text: p.text, involved: p.involved || [], status: p.type === 'neg' ? 'aberto' : null, due_date: p.type === 'neg' ? p.due_date || null : null }))
       const ps = rows.length ? ok(await sb.from('nutri_points').insert(rows).select()) : []
       return { report: (await signPhotos([r]))[0], points: ps }
     },
@@ -288,7 +288,7 @@ function demoApi() {
     async nutriCreateReport(report, points) {
       const n = loadNutri()
       const r = { ...report, id: uid(), author: me().name, created_at: new Date().toISOString() }
-      const ps = points.map((p) => ({ ...p, id: uid(), report_id: r.id, date: r.date, status: p.type === 'neg' ? 'aberto' : null, response: '', due_date: null }))
+      const ps = points.map((p) => ({ ...p, id: uid(), report_id: r.id, date: r.date, status: p.type === 'neg' ? 'aberto' : null, response: '', due_date: p.type === 'neg' ? p.due_date || null : null }))
       n.reports.push(r); n.points.push(...ps); saveNutri()
       return clone({ report: r, points: ps })
     },
