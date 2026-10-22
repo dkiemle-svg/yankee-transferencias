@@ -225,6 +225,7 @@ function UsersAdmin({ store }) {
   async function update(p, patch) {
     const next = { ...p, ...patch }
     if (next.role !== 'hub') next.unit_id = null
+    next.access = next.role === 'nutri' ? ['nutricao'] : []
     try { await api.saveProfile(next); setList((l) => l.map((x) => (x.id === p.id ? next : x))); toast('Acesso atualizado.') } catch (e) { toast(e.message, 'error') }
   }
 
@@ -237,7 +238,7 @@ function UsersAdmin({ store }) {
       </div>
       <div className="table-wrap">
         <table className="data">
-          <thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th>Unidade</th><th /></tr></thead>
+          <thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th>Unidade</th><th>Master</th><th /></tr></thead>
           <tbody>
             {list.map((p) => (
               <tr key={p.id}>
@@ -247,7 +248,8 @@ function UsersAdmin({ store }) {
                   <select className="select" style={{ width: 200 }} value={p.role} disabled={p.id === me.id} onChange={(e) => update(p, { role: e.target.value, unit_id: e.target.value === 'hub' ? (p.unit_id || units.find((u) => u.is_hub)?.id) : null })}>
                     <option value="pending">Sem acesso</option>
                     <option value="hub">Equipe de delivery</option>
-                    <option value="admin">Administrativo (tudo)</option>
+                    <option value="nutri">Nutricionista</option>
+                    <option value="admin">Administrativo</option>
                   </select>
                 </td>
                 <td>
@@ -257,6 +259,7 @@ function UsersAdmin({ store }) {
                     </select>
                   ) : <span className="muted">{p.role === 'admin' ? 'Todas' : '—'}</span>}
                 </td>
+                <td><label className="pop-item" style={{ padding: 0 }} title="Master vê todos os painéis"><input type="checkbox" className="check" checked={!!p.master} disabled={p.id === me.id} onChange={(e) => update(p, { master: e.target.checked, role: e.target.checked ? 'admin' : p.role })} />Todos os painéis</label></td>
                 <td><button className="btn sm" onClick={() => setPwFor(p)}>Redefinir senha</button></td>
               </tr>
             ))}
