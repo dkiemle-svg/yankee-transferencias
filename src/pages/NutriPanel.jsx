@@ -486,7 +486,7 @@ function Team({ ctx }) {
               <div className="tc-head">
                 <span className="avatar">{initials(e.name)}</span>
                 <div className="tc-who"><strong>{e.name}</strong><small>{e.role || 'Sem função'} · {UNIT_NAMES[e.unit] || '—'}</small></div>
-                <span className={`score ${s.score >= 0 ? 'up' : 'down'}`} title="Pontuação no mês">{s.score > 0 ? '+' : ''}{s.score}</span>
+                <span className={`score ${s.score >= 0 ? 'up' : 'down'}`} title="Pontuação no mês">{fmtS(s.score)}</span>
               </div>
               <div className="tc-cols">
                 <div>
@@ -607,7 +607,7 @@ function Ranking({ ctx }) {
               <Medal className="pod-medal" />
               <span className="avatar">{initials(r.e.name)}</span>
               <strong>{r.e.name.split(' ')[0]}</strong>
-              <span className="pod-score">{r.score > 0 ? '+' : ''}{r.score} pts</span>
+              <span className="pod-score">{fmtS(r.score)} pts</span>
             </div>
           ))}
         </div>
@@ -626,9 +626,9 @@ function Ranking({ ctx }) {
                   <td className="num" style={{ color: 'var(--warn)' }}>{r.neg}</td>
                   <td className="num">{r.resolved}</td>
                   <td className="num">{r.open}</td>
-                  <td className="num"><strong>{r.score > 0 ? '+' : ''}{r.score}</strong></td>
+                  <td className="num"><strong>{fmtS(r.score)}</strong></td>
                   <td>
-                    <div className="goal-bar" title={`${r.score} de ${goal.min_score} pts`}><span style={{ width: `${Math.max(0, Math.min(100, (r.score / (goal.min_score || 1)) * 100))}%` }} className={r.hit ? 'hit' : ''} /></div>
+                    <div className="goal-bar" title={`${fmtS(r.score)} de ${goal.min_score} pts`}><span style={{ width: `${Math.max(0, Math.min(100, (r.score / (goal.min_score || 1)) * 100))}%` }} className={r.hit ? 'hit' : ''} /></div>
                   </td>
                   <td>{!goal.active ? <span className="muted">—</span> : r.hit ? <span className="pill good"><Trophy size={12} />Meta batida</span> : r.score < goal.min_score ? <span className="pill">{(() => { const f = Math.round((goal.min_score - r.score) * 10) / 10; return f === 1 ? 'Falta 1 pt' : `Faltam ${String(f).replace('.', ',')} pts` })()}</span> : <span className="pill warn">{r.open} em aberto</span>}</td>
                 </tr>
@@ -641,6 +641,7 @@ function Ranking({ ctx }) {
     </>
   )
 }
+const fmtS = (v) => `${v > 0 ? '+' : ''}${String(v).replace('.', ',')}`
 const fmtW = (v) => `${v > 0 ? '+' : ''}${String(v).replace('.', ',')}`
 
 function GoalForm({ ctx, onClose }) {
@@ -733,7 +734,7 @@ function WeeklyReport({ ctx, initial, onClose }) {
               <div className="tc-head">
                 <span className="avatar">{initials(e.name)}</span>
                 <div className="tc-who"><strong>{e.name}</strong><small>{e.role} · {UNIT_NAMES[e.unit]} · {periodLabel}</small></div>
-                <span className={`score ${s.score >= 0 ? 'up' : 'down'}`}>{s.score > 0 ? '+' : ''}{s.score}</span>
+                <span className={`score ${s.score >= 0 ? 'up' : 'down'}`}>{fmtS(s.score)}</span>
                 <button className="btn sm" onClick={() => copy(id)}><Copy />Copiar para WhatsApp</button>
               </div>
               <div className="tc-cols">

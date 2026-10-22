@@ -225,12 +225,14 @@ function UsersAdmin({ store }) {
   async function update(p, patch) {
     const next = { ...p, ...patch }
     if (next.role !== 'hub') next.unit_id = null
-    next.access = next.role === 'nutri' ? ['nutricao'] : []
+    if ('role' in patch) next.access = next.role === 'nutri' ? ['nutricao'] : next.role === 'admin' ? ['transferencias'] : []
     try { await api.saveProfile(next); setList((l) => l.map((x) => (x.id === p.id ? next : x))); toast('Acesso atualizado.') } catch (e) { toast(e.message, 'error') }
   }
 
   if (!list) return <div className="card empty"><div className="spinner" /></div>
   const pending = list.filter((p) => p.role === 'pending').length
+  // quem não é master só gerencia o pessoal de Transferências
+  const locked = (p) => p.id === me.id || (!store.isMaster && (p.master || p.role === 'nutri'))
   return (
     <div className="card">
       <div className="card-head" style={{ paddingBottom: 14 }}>
@@ -238,29 +240,29 @@ function UsersAdmin({ store }) {
       </div>
       <div className="table-wrap">
         <table className="data">
-          <thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th>Unidade</th><th>Master</th><th /></tr></thead>
+          <thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th>Unidade</th>{store.isMaster && <th>Master</th>}<th /></tr></thead>
           <tbody>
             {list.map((p) => (
               <tr key={p.id}>
                 <td><strong>{p.name || '—'}</strong> {p.role === 'pending' && <span className="pill warn">aguardando</span>}</td>
                 <td className="muted">{toUser(p.email)}</td>
                 <td>
-                  <select className="select" style={{ width: 200 }} value={p.role} disabled={p.id === me.id} onChange={(e) => update(p, { role: e.target.value, unit_id: e.target.value === 'hub' ? (p.unit_id || units.find((u) => u.is_hub)?.id) : null })}>
+                  <select className="select" style={{ width: 200 }} value={p.role} disabled={locked(p)} onChange={(e) => update(p, { role: e.target.value, unit_id: e.target.value === 'hub' ? (p.unit_id || units.find((u) => u.is_hub)?.id) : null })}>
                     <option value="pending">Sem acesso</option>
                     <option value="hub">Equipe de delivery</option>
-                    <option value="nutri">Nutricionista</option>
+                    {(store.isMaster || p.role === 'nutri') && <option value="nutri">Nutricionista</option>}
                     <option value="admin">Administrativo</option>
                   </select>
                 </td>
                 <td>
                   {p.role === 'hub' ? (
-                    <select className="select" style={{ width: 200 }} value={p.unit_id || ''} onChange={(e) => update(p, { unit_id: e.target.value })}>
+                    <select className="select" style={{ width: 200 }} value={p.unit_id || ''} disabled={locked(p)} onChange={(e) => update(p, { unit_id: e.target.value })}>
                       {units.filter((u) => u.is_hub).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
                     </select>
                   ) : <span className="muted">{p.role === 'admin' ? 'Todas' : '—'}</span>}
                 </td>
-                <td><label className="pop-item" style={{ padding: 0 }} title="Master vê todos os painéis"><input type="checkbox" className="check" checked={!!p.master} disabled={p.id === me.id} onChange={(e) => update(p, { master: e.target.checked, role: e.target.checked ? 'admin' : p.role })} />Todos os painéis</label></td>
-                <td><button className="btn sm" onClick={() => setPwFor(p)}>Redefinir senha</button></td>
+                {store.isMaster && <td><label className="pop-item" style={{ padding: 0 }} title="Master vê todos os painéis"><input type="checkbox" className="check" checked={!!p.master} disabled={p.id === me.id} onChange={(e) => update(p, { master: e.target.checked, role: e.target.checked ? 'admin' : p.role })} />Todos os painéis</label></td>}
+                <td>{!locked(p) || p.id === me.id ? <button className="btn sm" onClick={() => setPwFor(p)}>Redefinir senha</button> : null}</td>
               </tr>
             ))}
           </tbody>
