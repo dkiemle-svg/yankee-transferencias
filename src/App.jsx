@@ -181,7 +181,7 @@ function Pending({ profile }) {
     <div className="center-screen">
       <div className="card card-pad" style={{ maxWidth: 440 }}>
         <h2 style={{ marginTop: 0 }}>Conta aguardando liberação</h2>
-        <p>Olá, {profile?.name || profile?.email}. Seu acesso foi criado e agora precisa ser liberado por um administrador, que vai definir quais painéis você vê.</p>
+        <p>Olá, {profile?.name || profile?.email}. Sua conta foi criada, mas ainda não tem acesso a nenhum painel. Avise o responsável para liberar o seu acesso.</p>
         <button className="btn" onClick={() => window.location.reload()}>Verificar novamente</button>
       </div>
     </div>

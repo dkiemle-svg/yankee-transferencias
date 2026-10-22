@@ -542,3 +542,6 @@ table.data tr.clickable { cursor: pointer; }
   .nr-top { grid-template-columns: 1fr 1fr; }
   .nr-top > :last-child { grid-column: 1 / -1; }
 }
+
+.waiting-note { width: 100%; border: 0; text-align: left; cursor: pointer; font: inherit; margin-bottom: 14px; }
+.waiting-note:hover { filter: brightness(.98); }
