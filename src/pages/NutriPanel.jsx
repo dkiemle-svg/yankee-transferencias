@@ -5,8 +5,9 @@ import {
 } from 'lucide-react'
 import { api } from '../lib/api.js'
 import { dateBR, today, addDays, weekStart, weekLabel, monthKey, monthLabel, normalize } from '../lib/format.js'
-import { parseReport, splitReports, dateFromTitle, scoreOf, monthRange, isOverdue, whatsappText } from '../lib/nutri.js'
+import { parseReport, splitReports, dateFromTitle, scoreOf, monthRange, isOverdue } from '../lib/nutri.js'
 import { Modal, useToast, useConfirm } from '../components/ui.jsx'
+import TeamReport from './NutriTeamReport.jsx'
 
 const UNIT_NAMES = { YANKEE: 'Yankee Burger', ZN: 'HubFood ZN', BV: 'HubFood BV' }
 const initials = (n) => (n || '?').split(/\s+/).map((s) => s[0]).slice(0, 2).join('').toUpperCase()
@@ -17,7 +18,7 @@ export default function NutriPanel({ store, tab, go }) {
   const n = store.nutri
   const canWrite = store.isMaster || store.profile?.role === 'nutri'
   const canManage = store.isMaster
-  const [reportFor, setReportFor] = useState(null) // { employeeId?, period? }
+  const [reportFor, setReportFor] = useState({}) // filtros iniciais do relatório da equipe { employeeId?, month? }
 
   if (!n) return <div className="center-screen"><div className="spinner" /></div>
   const empById = Object.fromEntries(n.employees.map((e) => [e.id, e]))
@@ -30,14 +31,15 @@ export default function NutriPanel({ store, tab, go }) {
     } catch (e) { toast(e.message, 'error') }
   }
 
-  const ctx = { store, n, empById, canWrite, canManage, patchPoint, openReport: setReportFor, toast }
+  const openReport = (initial = {}) => { setReportFor({ ...initial, at: Date.now() }); go('nutri-entrega') }
+  const ctx = { store, n, empById, canWrite, canManage, patchPoint, openReport, toast }
   return (
     <>
       {tab === 'nutri-relatorios' && <Reports ctx={ctx} />}
       {tab === 'nutri-acoes' && <Actions ctx={ctx} />}
       {tab === 'nutri-equipe' && <Team ctx={ctx} />}
       {tab === 'nutri-ranking' && <Ranking ctx={ctx} />}
-      {reportFor && <WeeklyReport ctx={ctx} initial={reportFor} onClose={() => setReportFor(null)} />}
+      {tab === 'nutri-entrega' && <TeamReport key={reportFor.at || 0} ctx={ctx} initial={reportFor} />}
     </>
   )
 }
@@ -212,6 +214,7 @@ function NewReport({ ctx, onClose }) {
   const { n, store, toast, empById } = ctx
   const [step, setStep] = useState(1)
   const [date, setDate] = useState(today())
+  const [due, setDue] = useState('')
   const [text, setText] = useState('')
   const [photos, setPhotos] = useState([])
   const [drafts, setDrafts] = useState([])
@@ -231,21 +234,22 @@ function NewReport({ ctx, onClose }) {
     const parts = splitReports(text)
     const list = (parts.length ? parts : [{ title: '', text }]).map((r, i) => ({
       key: i, title: r.title, text: r.text, date: dateFromTitle(r.title) || date,
-      points: parseReport(r.text, n.employees).map((p) => ({ ...p, key: k++ })),
+      points: parseReport(r.text, n.employees).map((p) => ({ ...p, key: k++, due_date: p.type === 'neg' ? due || null : null })),
     }))
     setDrafts(list); setPhotoTo(list.length - 1); setStep(2)
   }
   const setDraft = (dk, patch) => setDrafts((ds) => ds.map((d) => (d.key === dk ? { ...d, ...patch } : d)))
   const setPt = (dk, key, patch) => setDrafts((ds) => ds.map((d) => (d.key !== dk ? d : { ...d, points: d.points.map((p) => (p.key === key ? { ...p, ...patch, check: false } : p)) })))
   const delPt = (dk, key) => setDrafts((ds) => ds.map((d) => (d.key !== dk ? d : { ...d, points: d.points.filter((p) => p.key !== key) })))
-  const addPt = (dk) => setDrafts((ds) => ds.map((d) => (d.key !== dk ? d : { ...d, points: [...d.points, { key: Date.now(), employee_id: null, type: 'neg', text: '', sector: 'Geral', involved: [], check: false }] })))
+  const addPt = (dk) => setDrafts((ds) => ds.map((d) => (d.key !== dk ? d : { ...d, points: [...d.points, { key: Date.now(), employee_id: null, type: 'neg', text: '', sector: 'Geral', involved: [], check: false, due_date: due || null }] })))
+  const dueAll = (v) => setDrafts((ds) => ds.map((d) => ({ ...d, points: d.points.map((p) => (p.type === 'neg' ? { ...p, due_date: v || null } : p)) })))
 
   const save = async () => {
     setBusy(true)
     try {
       let total = 0
       for (const [i, d] of drafts.entries()) {
-        const clean = d.points.filter((p) => p.text.trim()).map(({ key, check, ...p }) => p)
+        const clean = d.points.filter((p) => p.text.trim()).map(({ key, check, ...p }) => ({ ...p, due_date: p.type === 'neg' ? p.due_date || null : null }))
         const r = await api.nutriCreateReport({ date: d.date, text: d.text, photos: i === photoTo ? photos : [] }, clean)
         store.setNutri((x) => ({ ...x, reports: [...x.reports, r.report], points: [...x.points, ...r.points] }))
         total += clean.length
@@ -270,9 +274,10 @@ function NewReport({ ctx, onClose }) {
       </>}>
       {step === 1 ? (
         <div className="stack">
-          <div className="grid-2" style={{ gridTemplateColumns: '180px 1fr' }}>
+          <div className="grid-2 nr-top">
             <label className="field"><span>Data da visita</span><input type="date" className="input" value={date} onChange={(e) => setDate(e.target.value)} /></label>
-            <div className="field"><span>Como funciona</span><p className="hint" style={{ margin: 0 }}>Use (+) para o que está bom e (-) para o que precisa melhorar, como já faz no WhatsApp. A data do título é usada quando houver. O sistema identifica o responsável por cada item; você confere antes de salvar.</p></div>
+            <label className="field"><span>Prazo para resolver <small className="muted">(opcional)</small></span><input type="date" className="input" min={date} value={due} onChange={(e) => setDue(e.target.value)} /></label>
+            <div className="field"><span>Como funciona</span><p className="hint" style={{ margin: 0 }}>Use (+) para o que está bom e (-) para o que precisa melhorar, como já faz no WhatsApp. A data do título é usada quando houver. O prazo vale para todos os itens a melhorar e pode ser ajustado item a item. O sistema identifica o responsável por cada item; você confere antes de salvar.</p></div>
           </div>
           <label className="field"><span>Relatório</span>
             <textarea className="input" rows={12} placeholder={EXAMPLE} value={text} onChange={(e) => setText(e.target.value)} autoFocus />
@@ -293,6 +298,14 @@ function NewReport({ ctx, onClose }) {
       ) : (
         <div className="stack">
           {toCheck > 0 && <div className="note warn"><AlertTriangle size={16} />Os itens marcados com “confira” citam mais de uma pessoa ou ficaram ambíguos. Ajuste se precisar.</div>}
+          {all.some((p) => p.type === 'neg') && (
+            <div className="due-all">
+              <CalendarClock size={16} />
+              <span>Prazo para todos os itens a melhorar <small className="muted">(opcional)</small></span>
+              <input type="date" className="input" style={{ width: 160 }} value={due} onChange={(e) => { setDue(e.target.value); dueAll(e.target.value) }} aria-label="Prazo para todos" />
+              {due && <button className="btn sm" onClick={() => { setDue(''); dueAll('') }}>Sem prazo</button>}
+            </div>
+          )}
           {drafts.length > 1 && photos.length > 0 && (
             <label className="field" style={{ maxWidth: 360 }}><span>Anexar as fotos ao relatório de</span>
               <select className="select" value={photoTo} onChange={(e) => setPhotoTo(Number(e.target.value))}>{drafts.map((d, i) => <option key={d.key} value={i}>{dateBR(d.date)}</option>)}</select>
@@ -321,6 +334,12 @@ function NewReport({ ctx, onClose }) {
                       {p.sector && <span className="pill">{p.sector}</span>}
                       {p.involved?.length > 0 && <span className="pill accent">Cobrar: {p.involved.map((id) => empById[id]?.name.split(' ')[0]).filter(Boolean).join(', ')}</span>}
                       {p.check && <span className="pill warn">confira</span>}
+                      {p.type === 'neg' && (
+                        <label className="due-pill" title="Prazo para resolver (opcional)">
+                          <CalendarClock size={13} />
+                          <input type="date" value={p.due_date || ''} onChange={(e) => setPt(d.key, p.key, { due_date: e.target.value || null })} aria-label="Prazo para resolver" />
+                        </label>
+                      )}
                     </div>
                     <button className="btn ghost icon" aria-label="Remover ponto" onClick={() => delPt(d.key, p.key)}><Trash2 /></button>
                     <textarea className="input" rows={2} value={p.text} onChange={(e) => setPt(d.key, p.key, { text: e.target.value })} aria-label="Texto do ponto" />
@@ -430,7 +449,7 @@ function ActionCard({ p, emp, ctx }) {
         </div>
       ) : (
         <div className="ac-answer">
-          {p.response ? <><strong>Combinado:</strong> {p.response}{p.due_date && <> · prazo {dateBR(p.due_date)}</>}</> : <span className="muted">Aguardando resposta da gestão.</span>}
+          {p.response ? <><strong>Combinado:</strong> {p.response}{p.due_date && <> · prazo {dateBR(p.due_date)}</>}</> : <span className="muted">{p.due_date ? `Prazo ${dateBR(p.due_date)} · aguardando resposta da gestão.` : 'Aguardando resposta da gestão.'}</span>}
         </div>
       )}
     </div>
@@ -477,7 +496,7 @@ function Team({ ctx }) {
         {n.employees.filter((e) => e.active !== false).map((e) => {
           const pts = inPeriod.filter((p) => p.employee_id === e.id)
           const all = n.points.filter((p) => p.employee_id === e.id)
-          const s = scoreOf(pts, w)
+          const s = scoreOf(all, w, from, to)
           const good = pts.filter((p) => p.type === 'pos').slice(-3).reverse()
           const todo = all.filter((p) => p.type === 'neg' && p.status !== 'resolvido')
           const following = n.points.filter((p) => p.type === 'neg' && p.status !== 'resolvido' && p.involved?.includes(e.id))
@@ -504,7 +523,7 @@ function Team({ ctx }) {
                 <div className="tc-follow"><ListChecks size={13} />Cobrando {following.length} {following.length === 1 ? 'ação' : 'ações'} da equipe: {following.map((p) => p.text.split(/[.,(]/)[0]).slice(0, 2).join('; ')}{following.length > 2 ? '…' : ''}</div>
               )}
               <div className="tc-foot">
-                <span className="muted">{s.pos} positivos · {s.neg} a melhorar no mês</span>
+                <span className="muted">{s.pos} positivos · {s.resolved} resolvidos · {s.neg} a melhorar no mês</span>
                 <div className="row-actions" style={{ opacity: 1 }}>
                   {canWrite && <button className="btn ghost icon" aria-label="Editar funcionário" onClick={() => setEditing(e)}><Pencil /></button>}
                   <button className="btn sm" onClick={() => ctx.openReport({ employeeId: e.id, month })}><FileText />Relatório</button>
@@ -567,7 +586,7 @@ function Ranking({ ctx }) {
   const [from, to] = monthRange(month)
   const { weights: w, goal } = n.settings
   const rows = n.employees.filter((e) => e.active !== false).map((e) => {
-    const s = scoreOf(n.points.filter((p) => p.employee_id === e.id && p.date >= from && p.date <= to), w)
+    const s = scoreOf(n.points.filter((p) => p.employee_id === e.id), w, from, to)
     const hit = goal.active && s.score >= goal.min_score && s.open <= goal.max_open
     return { e, ...s, hit }
   }).sort((a, b) => b.score - a.score || b.pos - a.pos || a.open - b.open)
@@ -599,7 +618,7 @@ function Ranking({ ctx }) {
             <div><small>Máx. de ações em aberto</small><strong>{goal.max_open}</strong></div>
             <div className="wide"><small>Recompensa</small><strong>{goal.reward || '—'}</strong></div>
           </div>
-          <p className="hint" style={{ margin: 0 }}>Como pontua: positivo {fmtW(w.pos)} · a melhorar {fmtW(w.neg)} · a melhorar resolvido {fmtW(w.resolved)}.</p>
+          <p className="hint" style={{ margin: 0 }}>Como pontua: positivo {fmtW(w.pos)} · a melhorar {fmtW(w.neg)} · resolvido {fmtW(w.resolved)} (conta como positivo no mês em que foi resolvido).</p>
         </div>
         <div className="podium">
           {rows.slice(0, 3).map((r, i) => (
@@ -669,93 +688,10 @@ function GoalForm({ ctx, onClose }) {
         <div className="grid-3">
           <label className="field"><span>Ponto positivo</span><input className="input num" inputMode="decimal" value={s.weights.pos} onChange={(e) => setW('pos', num(e.target.value))} /></label>
           <label className="field"><span>Ponto a melhorar</span><input className="input num" inputMode="decimal" value={s.weights.neg} onChange={(e) => setW('neg', num(e.target.value))} /></label>
-          <label className="field"><span>Bônus ao resolver</span><input className="input num" inputMode="decimal" value={s.weights.resolved} onChange={(e) => setW('resolved', num(e.target.value))} /></label>
+          <label className="field"><span>Ponto ao resolver</span><input className="input num" inputMode="decimal" value={s.weights.resolved} onChange={(e) => setW('resolved', num(e.target.value))} /></label>
         </div>
         <p className="hint" style={{ margin: 0 }}>Exemplo com os pesos atuais: 5 positivos e 2 a melhorar, sendo 1 resolvido = {Math.round((5 * s.weights.pos + 2 * s.weights.neg + s.weights.resolved) * 10) / 10} pontos.</p>
       </form>
-    </Modal>
-  )
-}
-
-// =====================================================================
-// Relatório para a equipe (semanal ou mensal, por funcionário)
-// =====================================================================
-function WeeklyReport({ ctx, initial, onClose }) {
-  const { n, empById, toast } = ctx
-  const { weeks, months, latest } = usePeriods(n.points)
-  const [mode, setMode] = useState(initial.month ? 'month' : 'week')
-  const [week, setWeek] = useState(weeks.find((w) => n.points.some((p) => weekStart(p.date) === w)) || weeks[0])
-  const [month, setMonth] = useState(initial.month || latest)
-  const [emp, setEmp] = useState(initial.employeeId || '')
-  const [from, to] = mode === 'week' ? [week, addDays(week, 6)] : monthRange(month)
-  const periodLabel = mode === 'week' ? `Semana de ${dateBR(from)} a ${dateBR(to)}` : `Mês de ${monthLabel(month)}`
-  const pts = n.points.filter((p) => p.date >= from && p.date <= to && p.employee_id && (!emp || p.employee_id === emp))
-  const groups = groupBy(pts, (p) => p.employee_id)
-  const ids = Object.keys(groups).sort((a, b) => (empById[a]?.name || '').localeCompare(empById[b]?.name || ''))
-
-  const copy = async (id) => {
-    const text = whatsappText(empById[id], groups[id], periodLabel)
-    try { await navigator.clipboard.writeText(text); toast(`Texto de ${empById[id].name.split(' ')[0]} copiado. Cole no WhatsApp.`) }
-    catch { toast('Não foi possível copiar automaticamente. Use o PDF ou selecione o texto.', 'error') }
-  }
-  const pdf = async () => {
-    const { exportNutriPDF } = await import('../lib/nutriExport.js')
-    await exportNutriPDF(ids.map((id) => ({ emp: empById[id], points: groups[id], score: scoreOf(groups[id], n.settings.weights) })), periodLabel)
-  }
-
-  return (
-    <Modal title="Relatório para a equipe" onClose={onClose} wide
-      footer={<>
-        <span className="left">{ids.length} funcionário{ids.length !== 1 ? 's' : ''} · {pts.filter((p) => p.type === 'pos').length} positivos · {pts.filter((p) => p.type === 'neg').length} a melhorar</span>
-        <button className="btn" onClick={pdf} disabled={!ids.length}><FileDown />Baixar PDF</button>
-        <button className="btn primary" onClick={onClose}>Fechar</button>
-      </>}>
-      <div className="filters" style={{ padding: '0 0 14px' }}>
-        <div className="seg" role="group" aria-label="Período">
-          <button aria-pressed={mode === 'week'} onClick={() => setMode('week')}>Semana</button>
-          <button aria-pressed={mode === 'month'} onClick={() => setMode('month')}>Mês</button>
-        </div>
-        {mode === 'week'
-          ? <select className="select" style={{ width: 200 }} value={week} onChange={(e) => setWeek(e.target.value)} aria-label="Semana">{weeks.map((w) => <option key={w} value={w}>Semana {weekLabel(w)}</option>)}</select>
-          : <select className="select" style={{ width: 170 }} value={month} onChange={(e) => setMonth(e.target.value)} aria-label="Mês">{months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}</select>}
-        <select className="select" style={{ width: 220 }} value={emp} onChange={(e) => setEmp(e.target.value)} aria-label="Funcionário">
-          <option value="">Todos os funcionários</option>
-          {n.employees.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
-        </select>
-      </div>
-      {!ids.length && <div className="empty"><Inbox /><div>Nenhum ponto registrado nesse período.</div></div>}
-      <div className="wr-list">
-        {ids.map((id) => {
-          const e = empById[id]; const list = groups[id]
-          const s = scoreOf(list, n.settings.weights)
-          const pos = list.filter((p) => p.type === 'pos'); const neg = list.filter((p) => p.type === 'neg')
-          return (
-            <div key={id} className="wr-card">
-              <div className="tc-head">
-                <span className="avatar">{initials(e.name)}</span>
-                <div className="tc-who"><strong>{e.name}</strong><small>{e.role} · {UNIT_NAMES[e.unit]} · {periodLabel}</small></div>
-                <span className={`score ${s.score >= 0 ? 'up' : 'down'}`}>{fmtS(s.score)}</span>
-                <button className="btn sm" onClick={() => copy(id)}><Copy />Copiar para WhatsApp</button>
-              </div>
-              <div className="tc-cols">
-                <div>
-                  <div className="section-label good"><ThumbsUp size={13} />O que está bom</div>
-                  {pos.length ? pos.map((p) => <p key={p.id} className="tc-item">{p.text}</p>) : <p className="tc-item muted">Sem registros.</p>}
-                </div>
-                <div>
-                  <div className="section-label warn"><Target size={13} />O que precisa melhorar</div>
-                  {neg.length ? neg.map((p) => (
-                    <div key={p.id} className="tc-item">
-                      {p.text} <StatusPill p={p} />
-                      {p.response && <div className="tc-plan"><CalendarClock size={12} />{p.response}{p.due_date && ` · até ${dateBR(p.due_date)}`}</div>}
-                    </div>
-                  )) : <p className="tc-item muted">Nada a melhorar. Continue assim!</p>}
-                </div>
-              </div>
-            </div>
-          )
-        })}
-      </div>
     </Modal>
   )
 }
