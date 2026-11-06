@@ -139,6 +139,41 @@ function supabaseApi() {
       return ok(await sb.from('nutri_points').update(p).eq('id', id).select().single())
     },
     async nutriSaveSettings(settings) { ok(await sb.from('nutri_settings').upsert({ id: 1, data: settings })); return settings },
+
+    // ----- Painel Financeiro -----
+    async finLoad() {
+      const all = async (table, order) => {
+        const out = []
+        for (let from = 0; ; from += 1000) {
+          const page = ok(await sb.from(table).select('*').order(order).range(from, from + 999))
+          out.push(...page); if (page.length < 1000) break
+        }
+        return out
+      }
+      const [lancamentos, pagamentos, custos_fixos, vendas, historico] = await Promise.all([
+        all('fin_lancamentos', 'vencimento'), all('fin_pagamentos', 'id'), all('fin_custos_fixos', 'created_at'),
+        all('fin_vendas', 'dia'), all('fin_historico', 'mes'),
+      ])
+      const n = (rows, ...ks) => rows.map((r) => { const o = { ...r }; ks.forEach((k) => { if (o[k] != null) o[k] = Number(o[k]) }); return o })
+      return { lancamentos: n(lancamentos, 'valor'), pagamentos, custos_fixos: n(custos_fixos, 'valor', 'dia'), vendas: n(vendas, 'valor'), historico: n(historico, 'total', 'promo_valor') }
+    },
+    async finSetPago(ids, data) {
+      if (data) ok(await sb.from('fin_pagamentos').upsert(ids.map((id) => ({ id, data, at: new Date().toISOString() }))))
+      else ok(await sb.from('fin_pagamentos').delete().in('id', ids))
+    },
+    async finSaveFixo(f) {
+      const { id, ...rest } = f
+      return id ? ok(await sb.from('fin_custos_fixos').update(rest).eq('id', id).select().single())
+                : ok(await sb.from('fin_custos_fixos').insert(rest).select().single())
+    },
+    async finDeleteFixo(id) { ok(await sb.from('fin_custos_fixos').delete().eq('id', id)) },
+    async finSaveLancamento(l) { return ok(await sb.from('fin_lancamentos').upsert({ ...l, updated_at: new Date().toISOString() }).select().single()) },
+    async finDeleteLancamento(id) { ok(await sb.from('fin_lancamentos').delete().eq('id', id)); await sb.from('fin_pagamentos').delete().eq('id', id) },
+    async finImport(kind, rows) {
+      const table = { lancamentos: 'fin_lancamentos', vendas: 'fin_vendas', historico: 'fin_historico' }[kind]
+      const onConflict = { lancamentos: 'id', vendas: 'dia,unidade,forma', historico: 'mes,unidade' }[kind]
+      for (let i = 0; i < rows.length; i += 500) ok(await sb.from(table).upsert(rows.slice(i, i + 500), { onConflict }))
+    },
   }
 
   async function signPhotos(reports) {
@@ -154,8 +189,17 @@ function supabaseApi() {
 // Modo demonstração (localStorage)
 // =====================================================================
 function demoApi() {
-  const KEY_DB = 'yankee-demo-db-v4'
+  const KEY_DB = 'yankee-demo-db-v5'
   const KEY_NUTRI = 'yankee-demo-nutri-v2'
+  const KEY_FIN = 'yankee-demo-fin-v1'
+  let fin = null
+  const saveFin = () => { try { localStorage.setItem(KEY_FIN, JSON.stringify(fin)) } catch { /* */ } }
+  const loadFin = () => {
+    if (fin) return fin
+    try { const raw = localStorage.getItem(KEY_FIN); if (raw) fin = JSON.parse(raw) } catch { /* */ }
+    if (!fin) { fin = { lancamentos: [], pagamentos: [], custos_fixos: [], vendas: [], historico: [] }; saveFin() }
+    return fin
+  }
   const KEY_AS = 'yankee-demo-as'
   const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36))
   let db = null
@@ -193,7 +237,7 @@ function demoApi() {
       notes: t.notes, paid: t.paid, paid_at: null, created_by: 'demo-admin', created_at: new Date(Date.parse(t.date) + i).toISOString(),
     }))
     const profiles = [
-      { id: 'demo-daniel', email: 'danielkiemle@yankeeburger.com.br', name: 'Daniel Kiemle', role: 'admin', master: true, unit_id: null, prefs: {} },
+      { id: 'demo-daniel', email: 'danielkiemle@yankeeburger.com.br', name: 'Daniel Kiemle', role: 'admin', master: true, access: ['financeiro'], unit_id: null, prefs: {} },
       { id: 'demo-rebeca', email: 'rebeca@yankeeburger.com.br', name: 'Rebeca', role: 'nutri', access: ['nutricao'], unit_id: null, prefs: {} },
       { id: 'demo-admin', email: 'raquel@yankeeburger.com.br', name: 'Raquel', role: 'admin', access: ['transferencias'], unit_id: null, prefs: {} },
       { id: 'demo-zn', email: 'zn@yankeeburger.com.br', name: 'Equipe HubFood ZN', role: 'hub', unit_id: 'u-zn', prefs: {} },
@@ -212,7 +256,7 @@ function demoApi() {
     onAuth() { return () => {} },
     async signIn() {}, async signUp() {}, async resetPassword() {}, async updatePassword() {}, async signOut() {},
     async viewAs(id) { try { localStorage.setItem(KEY_AS, id) } catch { /* */ } },
-    async resetDemo() { try { localStorage.removeItem(KEY_DB); localStorage.removeItem(KEY_NUTRI) } catch { /* */ } db = null; nutri = null; await load() },
+    async resetDemo() { try { localStorage.removeItem(KEY_DB); localStorage.removeItem(KEY_NUTRI); localStorage.removeItem(KEY_FIN) } catch { /* */ } db = null; nutri = null; fin = null; await load() },
 
     async profile() { await load(); return { ...me() } },
     async savePrefs(prefs) { await load(); me().prefs = prefs; save() },
@@ -299,6 +343,28 @@ function demoApi() {
       saveNutri(); return clone(p)
     },
     async nutriSaveSettings(settings) { const n = loadNutri(); n.settings = settings; saveNutri(); return clone(settings) },
+
+    // ----- Painel Financeiro (demonstração: guardado no navegador) -----
+    async finLoad() { await load(); return delay(clone(loadFin())) },
+    async finSetPago(ids, data) {
+      const f = loadFin(); f.pagamentos = f.pagamentos.filter((p) => !ids.includes(p.id))
+      if (data) f.pagamentos.push(...ids.map((id) => ({ id, data, at: new Date().toISOString() })))
+      saveFin()
+    },
+    async finSaveFixo(x) {
+      const f = loadFin()
+      if (x.id) Object.assign(f.custos_fixos.find((c) => c.id === x.id), x)
+      else { x = { ...x, id: uid(), created_at: new Date().toISOString() }; f.custos_fixos.push(x) }
+      saveFin(); return clone(x)
+    },
+    async finDeleteFixo(id) { const f = loadFin(); f.custos_fixos = f.custos_fixos.filter((c) => c.id !== id); saveFin() },
+    async finSaveLancamento(l) { const f = loadFin(); f.lancamentos = [...f.lancamentos.filter((x) => x.id !== l.id), l]; saveFin(); return clone(l) },
+    async finDeleteLancamento(id) { const f = loadFin(); f.lancamentos = f.lancamentos.filter((x) => x.id !== id); f.pagamentos = f.pagamentos.filter((p) => p.id !== id); saveFin() },
+    async finImport(kind, rows) {
+      const f = loadFin()
+      const key = { lancamentos: (r) => r.id, vendas: (r) => `${r.dia}|${r.unidade}|${r.forma}`, historico: (r) => `${r.mes}|${r.unidade}` }[kind]
+      const m = new Map(f[kind].map((r) => [key(r), r])); rows.forEach((r) => m.set(key(r), r)); f[kind] = [...m.values()]; saveFin()
+    },
     async saveProfile(p) { await load(); Object.assign(db.profiles.find((x) => x.id === p.id), { role: p.role, unit_id: p.unit_id || null, name: p.name }); save() },
   }
 }
