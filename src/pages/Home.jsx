@@ -1,55 +1,18 @@
-import React, { useEffect, useMemo, useState } from 'react'
-import { ArrowRight, Lock, Plus, UserPlus } from 'lucide-react'
+import React, { useEffect, useState } from 'react'
+import { ArrowRight, Lock, UserPlus } from 'lucide-react'
 import { api, DEMO } from '../lib/api.js'
-import { money, dateBR, today, addDays, weekStart } from '../lib/format.js'
-import { isOverdue } from '../lib/nutri.js'
-import { buildContas, resumoContas, calcMeta } from '../lib/fin.js'
 
 const greeting = () => { const h = new Date().getHours(); return h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite' }
 
+// Página inicial: só os nomes dos painéis que a pessoa pode abrir
 export default function Home({ store, panels }) {
-  const { profile, allowed, transfers, nutri, fin, isMaster } = store
+  const { profile, allowed, isMaster } = store
   const first = (profile?.name || '').split(' ')[0]
   const [waiting, setWaiting] = useState(0)
   useEffect(() => {
     if (!isMaster || DEMO) return
     api.profiles().then((l) => setWaiting(l.filter((p) => p.role === 'pending').length)).catch(() => {})
   }, [isMaster])
-
-  const stats = useMemo(() => {
-    const out = {}
-    if (allowed.includes('transferencias')) {
-      const open = transfers.filter((t) => !t.paid)
-      const ws = weekStart(today())
-      out.transferencias = [
-        { label: 'Em aberto', value: money(open.reduce((s, t) => s + t.total, 0)), tone: 'warn' },
-        { label: 'Lançamentos nesta semana', value: transfers.filter((t) => t.date >= ws).length },
-        { label: 'Em aberto mais antigo', value: open.length ? dateBR(open.map((t) => t.date).sort()[0]) : '—' },
-      ]
-    }
-    if (allowed.includes('nutricao') && nutri) {
-      const neg = nutri.points.filter((p) => p.type === 'neg' && p.status !== 'resolvido')
-      const late = nutri.points.filter(isOverdue)
-      const lastReport = [...nutri.reports].sort((a, b) => b.date.localeCompare(a.date))[0]
-      const since = addDays(today(), -30)
-      const recent = nutri.points.filter((p) => p.date >= since)
-      out.nutricao = [
-        { label: 'Ações em aberto', value: neg.length, tone: neg.length ? 'warn' : 'good', hint: late.length ? `${late.length} atrasada${late.length > 1 ? 's' : ''}` : null },
-        { label: 'Últimos 30 dias', value: `${recent.filter((p) => p.type === 'pos').length} positivos · ${recent.filter((p) => p.type === 'neg').length} a melhorar` },
-        { label: 'Último relatório', value: lastReport ? dateBR(lastReport.date) : '—' },
-      ]
-    }
-    if (allowed.includes('financeiro') && fin) {
-      const r = resumoContas(buildContas(fin))
-      const m = calcMeta(fin.vendas, fin.historico, 'Todas')
-      out.financeiro = [
-        { label: 'Vence hoje', value: money(r.hoje.v), tone: r.hoje.n ? 'warn' : '', hint: r.atraso.n ? `${money(r.atraso.v)} em atraso` : null },
-        { label: 'Próximos 7 dias', value: money(r.prox.v) },
-        { label: 'Vendas × meta', value: m.metaMes ? `${Math.round(m.pct * 100)}% · faltam ${money(m.falta)}` : money(m.vendido), tone: m.pctProj >= 1 ? 'good' : '' },
-      ]
-    }
-    return out
-  }, [allowed, transfers, nutri, fin])
 
   const visible = panels.filter((p) => allowed.includes(p.key) || (isMaster && !p.restricted))
 
@@ -73,37 +36,13 @@ export default function Home({ store, panels }) {
           const I = p.icon
           const can = allowed.includes(p.key)
           return (
-            <button key={p.key} className={`panel-card ${can ? '' : 'locked'}`} onClick={() => can && store.go(p.tabs[0].id)} disabled={!can}>
-              <div className="panel-top">
-                <span className={`panel-icon pi-${p.key}`}><I /></span>
-                <div className="panel-title">
-                  <strong>{p.name}</strong>
-                  <small>Responsável: {p.owner}</small>
-                </div>
-                {can ? <ArrowRight className="panel-go" /> : <Lock className="panel-go" />}
-              </div>
-              <p className="panel-desc">{p.desc}</p>
-              {stats[p.key] && (
-                <div className="panel-stats">
-                  {stats[p.key].map((s) => (
-                    <div key={s.label}>
-                      <small>{s.label}</small>
-                      <strong className={s.tone || ''}>{s.value}</strong>
-                      {s.hint && <em>{s.hint}</em>}
-                    </div>
-                  ))}
-                </div>
-              )}
+            <button key={p.key} className={`panel-card panel-card-min ${can ? '' : 'locked'}`} onClick={() => can && store.go(p.tabs[0].id)} disabled={!can}>
+              <span className={`panel-icon pi-${p.key}`}><I /></span>
+              <strong className="panel-name">{p.name}</strong>
+              {can ? <ArrowRight className="panel-go" /> : <Lock className="panel-go" />}
             </button>
           )
         })}
-        {isMaster && (
-          <div className="panel-card placeholder">
-            <span className="panel-icon"><Plus /></span>
-            <strong>Próximo painel</strong>
-            <p className="panel-desc">Espaço para as próximas áreas da gestão, cada uma com o seu responsável.</p>
-          </div>
-        )}
       </div>
     </div>
   )
