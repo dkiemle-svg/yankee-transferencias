@@ -3,11 +3,12 @@ import { ArrowRight, Lock, Plus, UserPlus } from 'lucide-react'
 import { api, DEMO } from '../lib/api.js'
 import { money, dateBR, today, addDays, weekStart } from '../lib/format.js'
 import { isOverdue } from '../lib/nutri.js'
+import { buildContas, resumoContas, calcMeta } from '../lib/fin.js'
 
 const greeting = () => { const h = new Date().getHours(); return h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite' }
 
 export default function Home({ store, panels }) {
-  const { profile, allowed, transfers, nutri, isMaster } = store
+  const { profile, allowed, transfers, nutri, fin, isMaster } = store
   const first = (profile?.name || '').split(' ')[0]
   const [waiting, setWaiting] = useState(0)
   useEffect(() => {
@@ -38,10 +39,19 @@ export default function Home({ store, panels }) {
         { label: 'Último relatório', value: lastReport ? dateBR(lastReport.date) : '—' },
       ]
     }
+    if (allowed.includes('financeiro') && fin) {
+      const r = resumoContas(buildContas(fin))
+      const m = calcMeta(fin.vendas, fin.historico, 'Todas')
+      out.financeiro = [
+        { label: 'Vence hoje', value: money(r.hoje.v), tone: r.hoje.n ? 'warn' : '', hint: r.atraso.n ? `${money(r.atraso.v)} em atraso` : null },
+        { label: 'Próximos 7 dias', value: money(r.prox.v) },
+        { label: 'Vendas × meta', value: m.metaMes ? `${Math.round(m.pct * 100)}% · faltam ${money(m.falta)}` : money(m.vendido), tone: m.pctProj >= 1 ? 'good' : '' },
+      ]
+    }
     return out
-  }, [allowed, transfers, nutri])
+  }, [allowed, transfers, nutri, fin])
 
-  const visible = panels.filter((p) => isMaster || allowed.includes(p.key))
+  const visible = panels.filter((p) => allowed.includes(p.key) || (isMaster && !p.restricted))
 
   return (
     <div className="home">
