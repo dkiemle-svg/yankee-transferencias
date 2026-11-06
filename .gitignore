@@ -8,3 +8,4 @@ src/lib/seed.json
 supabase/seed.sql
 scripts/relatorios_rebeca.txt
 supabase/nutri_seed.sql
+supabase/fin_seed.sql

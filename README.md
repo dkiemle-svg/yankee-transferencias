@@ -5,6 +5,7 @@ Página inicial com os **painéis** da Yankee. Cada painel tem um responsável e
 | Painel | Responsável | O que faz |
 |---|---|---|
 | **Transferências** | Raquel · Administrativo | Envios da Yankee para os HubFood (detalhes abaixo) |
+| **Financeiro** | Daniel · Direção | Contas a pagar do dia (3LM + manuais + custos fixos) com marcar como pago, vendas e meta do mês com quanto falta, DRE gerencial com legado e BV abaixo do EBITDA, custos fixos recorrentes. Só aparece para quem for liberado nele (ser master não basta) |
 | **Nutrição** | Rebeca · Nutricionista | Relatórios das visitas técnicas (texto + fotos), pontos positivos/negativos por funcionário, ações com resposta e prazo, relatório semanal para a equipe (WhatsApp/PDF), ranking e meta de bônus |
 
 ### Painel Transferências
@@ -49,7 +50,7 @@ As regras são aplicadas no próprio banco (Row Level Security), não só na tel
 
 ## Montar do zero em outro projeto (se precisar)
 
-1. Supabase → SQL Editor: rode `supabase/schema.sql`, `supabase/painel_nutricao.sql`, `supabase/seguranca_acessos.sql` e depois `supabase/seed.sql` (a carga da planilha não fica no GitHub).
+1. Supabase → SQL Editor: rode `supabase/schema.sql`, `supabase/painel_nutricao.sql`, `supabase/seguranca_acessos.sql`, `supabase/painel_financeiro.sql` e depois `supabase/seed.sql` (a carga da planilha não fica no GitHub).
 2. Supabase → Authentication → Sign In / Providers: desligue **Confirm email**.
 3. Troque URL e chave em `src/config.js`.
 4. GitHub → Settings → Pages → Source: **GitHub Actions**.
