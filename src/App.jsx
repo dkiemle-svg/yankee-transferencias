@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeftRight, LayoutDashboard, Package, LogOut, Moon, Sun, KeyRound, ClipboardList, ListChecks, Users, Trophy, Home as HomeIcon, Salad, FileChartColumn } from 'lucide-react'
+import { ArrowLeftRight, LayoutDashboard, Package, LogOut, Moon, Sun, KeyRound, ClipboardList, ListChecks, Users, Trophy, Home as HomeIcon, Salad, FileChartColumn, Landmark, Gauge, ReceiptText, TrendingUp, Table2, Repeat } from 'lucide-react'
 import { api, DEMO } from './lib/api.js'
 import { ToastProvider, ConfirmProvider, Modal, useToast } from './components/ui.jsx'
 import Login from './pages/Login.jsx'
@@ -8,6 +8,7 @@ import Dashboard from './pages/Dashboard.jsx'
 import Catalog from './pages/Catalog.jsx'
 import Home from './pages/Home.jsx'
 import NutriPanel from './pages/NutriPanel.jsx'
+import FinPanel from './pages/FinPanel.jsx'
 
 // Painéis do sistema. Cada um tem um responsável e suas próprias abas.
 export const PANELS = [
@@ -31,17 +32,32 @@ export const PANELS = [
       { id: 'nutri-ranking', label: 'Ranking e metas', icon: Trophy },
     ],
   },
+  {
+    // restricted: só aparece para quem tem 'financeiro' em access (ser master não basta)
+    key: 'financeiro', name: 'Financeiro', icon: Landmark, owner: 'Daniel · Direção', restricted: true,
+    desc: 'Contas a pagar do dia, vendas e meta do mês, DRE gerencial e custos fixos.',
+    tabs: [
+      { id: 'fin-visao', label: 'Visão geral', icon: Gauge },
+      { id: 'fin-pagar', label: 'Contas a pagar', icon: ReceiptText },
+      { id: 'fin-vendas', label: 'Vendas e meta', icon: TrendingUp },
+      { id: 'fin-dre', label: 'DRE', icon: Table2 },
+      { id: 'fin-fixos', label: 'Custos fixos', icon: Repeat },
+    ],
+  },
 ]
 const panelOfTab = (tab) => PANELS.find((p) => p.tabs.some((t) => t.id === tab))
 
 // Quem acessa o quê: masters veem tudo; os demais, só o painel do qual são responsáveis
 export function panelsFor(profile) {
   if (!profile) return []
-  if (profile.master) return PANELS.map((p) => p.key)
-  if (Array.isArray(profile.access) && profile.access.length) return profile.access
-  if (profile.role === 'nutri') return ['nutricao']
-  if (profile.role === 'admin' || profile.role === 'hub') return ['transferencias']
-  return []
+  const access = Array.isArray(profile.access) ? profile.access : []
+  const extra = PANELS.filter((p) => p.restricted && access.includes(p.key)).map((p) => p.key)
+  if (profile.master) return [...PANELS.filter((p) => !p.restricted).map((p) => p.key), ...extra]
+  const base = access.filter((k) => !PANELS.find((p) => p.key === k)?.restricted)
+  if (base.length) return [...base, ...extra]
+  if (profile.role === 'nutri') return ['nutricao', ...extra]
+  if (profile.role === 'admin' || profile.role === 'hub') return ['transferencias', ...extra]
+  return extra
 }
 
 function useHashRoute() {
@@ -65,7 +81,7 @@ export default function App() {
   return <ToastProvider><ConfirmProvider><Shell /></ConfirmProvider></ToastProvider>
 }
 
-const EMPTY = { units: [], products: [], transfers: [], nutri: null, loaded: false }
+const EMPTY = { units: [], products: [], transfers: [], nutri: null, fin: null, loaded: false }
 
 function Shell() {
   const [session, setSession] = useState(undefined)
@@ -88,13 +104,14 @@ function Shell() {
       setProfile(p)
       const allowed = panelsFor(p)
       if (!p || p.role === 'pending' || !allowed.length) { setData({ ...EMPTY, loaded: true }); return }
-      const [units, products, transfers, nutri] = await Promise.all([
+      const [units, products, transfers, nutri, fin] = await Promise.all([
         allowed.includes('transferencias') || allowed.includes('nutricao') ? api.units() : [],
         allowed.includes('transferencias') ? api.products() : [],
         allowed.includes('transferencias') ? api.transfers() : [],
         allowed.includes('nutricao') && api.nutriLoad ? api.nutriLoad() : null,
+        allowed.includes('financeiro') && api.finLoad ? api.finLoad() : null,
       ])
-      setData({ units, products, transfers, nutri, loaded: true })
+      setData({ units, products, transfers, nutri, fin, loaded: true })
     } catch (e) { setError(e.message) }
   }, [])
 
@@ -113,6 +130,7 @@ function Shell() {
     setProducts: (fn) => setData((d) => ({ ...d, products: typeof fn === 'function' ? fn(d.products) : fn })),
     setUnits: (fn) => setData((d) => ({ ...d, units: typeof fn === 'function' ? fn(d.units) : fn })),
     setNutri: (fn) => setData((d) => ({ ...d, nutri: typeof fn === 'function' ? fn(d.nutri) : fn })),
+    setFin: (fn) => setData((d) => ({ ...d, fin: typeof fn === 'function' ? fn(d.fin) : fn })),
     setProfile, go: setRoute,
   }
 
@@ -166,6 +184,7 @@ function Shell() {
             {canSee && route === 'dashboard' && <Dashboard store={store} />}
             {canSee && route === 'cadastros' && <Catalog store={store} />}
             {canSee && panel.key === 'nutricao' && <NutriPanel store={store} tab={route} go={setRoute} />}
+            {canSee && panel.key === 'financeiro' && <FinPanel store={store} tab={route} go={setRoute} />}
           </>
         )}
       </main>
