@@ -603,3 +603,5 @@ table.fin-dre tr.below td { color: var(--text-2); font-style: italic; }
   .fm-row small { display: none; }
 }
 table.data th.num { text-align: right; }
+.panel-card.panel-card-min { flex-direction: row; align-items: center; gap: 14px; padding: 18px 20px; }
+.panel-card-min .panel-name { flex: 1; font-size: 17px; letter-spacing: -.01em; }
