@@ -1,11 +1,12 @@
 import React, { useMemo, useRef, useState } from 'react'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell, ReferenceLine, Legend } from 'recharts'
-import { AlertTriangle, CalendarDays, CheckCircle2, Clock, Pencil, Pause, Play, Plus, Target, Trash2, Undo2, Upload, Wallet, Inbox } from 'lucide-react'
+import { AlertTriangle, CalendarDays, CheckCircle2, ChartBarBig, Clock, Pencil, Pause, Play, Plus, Target, Trash2, Undo2, Upload, Wallet, Inbox } from 'lucide-react'
 import { api } from '../lib/api.js'
 import { money, moneyShort, dateBR, today, toISO } from '../lib/format.js'
 import {
   UNIDADES, CATEGORIAS, GRUPOS, INICIO, buildContas, resumoContas, vendasPorDia, calcMeta, comparativo, mixPagamentos,
   mesesDre, dre, parseFixos, detectImport, addDaysISO, mesNome, okUnidade,
+  CATS_PRODUTO, SEM_CAT, categoriaDe, parse3lmItens, rankingProdutos,
 } from '../lib/fin.js'
 import { Modal, useToast, useConfirm } from '../components/ui.jsx'
 
@@ -41,7 +42,7 @@ export default function FinPanel({ store, tab }) {
   if (!fin) return <div className="center-screen"><div className="spinner" /></div>
   const r = resumoContas(contas, hoje)
 
-  const ctx = { store, fin, unidade, contas, meta, hoje, openNovaConta: setNovaConta }
+  const ctx = { store, fin, unidade, contas, meta, hoje, openNovaConta: setNovaConta, openImport: () => setImporting(true) }
   return (
     <>
       <div className="page-head">
@@ -64,6 +65,7 @@ export default function FinPanel({ store, tab }) {
       {tab === 'fin-visao' && <Visao ctx={ctx} r={r} />}
       {tab === 'fin-pagar' && <Pagar ctx={ctx} />}
       {tab === 'fin-vendas' && <Vendas ctx={ctx} />}
+      {tab === 'fin-produtos' && <Produtos ctx={ctx} />}
       {tab === 'fin-dre' && <Dre ctx={ctx} />}
       {tab === 'fin-fixos' && <Fixos ctx={ctx} />}
       {importing && <ImportFin store={store} onClose={() => setImporting(false)} />}
@@ -382,6 +384,233 @@ function Vendas({ ctx }) {
 }
 
 // =====================================================================
+// Produtos vendidos (3LM → Itens vendidos → Dia a Dia)
+// =====================================================================
+const nomeProd = (s) => String(s || '').toLowerCase().replace(/(^|[\s(/-])\S/g, (u) => u.toUpperCase())
+const CLASSE_PILL = { A: 'good', B: 'accent', C: 'warn' }
+const qtdFmt = (v) => Number(v || 0).toLocaleString('pt-BR', { maximumFractionDigits: 1 })
+const ACESSORIOS = ['Extras', 'Molhos', 'Embalagem'] // ficam fora de mais/menos vendidos, salvo se filtrados
+const PRESETS = [['ultimo', 'Último dia'], ['7d', '7 dias'], ['mes', 'Este mês'], ['mespassado', 'Mês passado']]
+
+function rangeDe(preset, ultimo) {
+  const [y, m] = ultimo.split('-').map(Number)
+  if (preset === 'ultimo') return [ultimo, ultimo]
+  if (preset === '7d') return [addDaysISO(ultimo, -6), ultimo]
+  if (preset === 'mespassado') return [toISO(new Date(y, m - 2, 1)), toISO(new Date(y, m - 1, 0))]
+  return [`${ultimo.slice(0, 7)}-01`, ultimo]
+}
+
+function Produtos({ ctx }) {
+  const { fin, unidade, openImport } = ctx
+  const itens = fin.itens || []
+  const produtos = useMemo(() => Object.fromEntries((fin.produtos || []).map((p) => [p.codigo, p])), [fin.produtos])
+  const ultimo = useMemo(() => itens.reduce((mx, r) => (r.dia > mx ? r.dia : mx), ''), [itens])
+  const [preset, setPreset] = useState('mes')
+  const [range, setRange] = useState(null)
+  const [categoria, setCategoria] = useState('')
+  const [ordem, setOrdem] = useState('valor')
+  const [busca, setBusca] = useState('')
+  const [editCats, setEditCats] = useState(false)
+  const [de, ate] = range || (ultimo ? rangeDe(preset, ultimo) : ['', ''])
+  const R = useMemo(() => (ultimo ? rankingProdutos(itens, produtos, { de, ate, unidade, categoria }) : null), [itens, produtos, de, ate, unidade, categoria, ultimo])
+
+  if (!ultimo) {
+    return (
+      <div className="card">
+        <div className="empty">
+          <ChartBarBig />
+          <div style={{ fontWeight: 600, color: 'var(--text)', marginBottom: 6 }}>Ainda não há produtos vendidos importados.</div>
+          <div style={{ maxWidth: 520, margin: '0 auto 14px', lineHeight: 1.5 }}>
+            No 3LM, abra <b>Relatórios → Itens vendidos → Dia a Dia</b>, escolha o período, marque <b>Delimitador ;</b> e clique em Visualizar. Depois importe o arquivo aqui.
+          </div>
+          <button className="btn primary" onClick={openImport}><Upload />Importar 3LM</button>
+        </div>
+      </div>
+    )
+  }
+
+  const metric = (r) => (ordem === 'qtd' ? r.qtd : r.valor)
+  const fmtMetric = (v) => (ordem === 'qtd' ? `${qtdFmt(v)} un` : money(v))
+  const ordenados = [...R.rows].sort((a, b) => metric(b) - metric(a) || b.valor - a.valor)
+  const cardapio = categoria ? ordenados : ordenados.filter((r) => !ACESSORIOS.includes(r.categoria))
+  const top = cardapio.slice(0, 10)
+  const pagos = cardapio.filter((r) => r.valor > 0)
+  const menos = [...pagos].reverse().slice(0, 10)
+  const semVenda = categoria ? R.semVenda : R.semVenda.filter((r) => !ACESSORIOS.includes(r.categoria))
+  const maxTop = Math.max(0.0001, ...top.map(metric))
+  const maxMenos = Math.max(0.0001, ...menos.map(metric))
+  const maxCat = Math.max(0.0001, ...R.porCategoria.map((c) => c.share))
+  const cats = [...new Set([...CATS_PRODUTO, ...itens.map((r) => categoriaDe(r.codigo, produtos))])].filter((c) => itens.some((r) => categoriaDe(r.codigo, produtos) === c))
+  const semCat = new Set(itens.filter((r) => categoriaDe(r.codigo, produtos) === SEM_CAT).map((r) => r.codigo)).size
+  const q = busca.trim().toLowerCase()
+  const tabela = ordenados.filter((r) => !q || r.nome.toLowerCase().includes(q) || r.codigo.includes(q))
+  const lider = ordenados[0]
+  const setP = (p) => { setPreset(p); setRange(null) }
+  const setD = (i, v) => { if (!v) return; const n = [de, ate]; n[i] = v; if (n[0] > n[1]) n[1 - i] = v; setRange(n); setPreset('') }
+
+  return (
+    <>
+      <div className="card" style={{ marginBottom: 12 }}>
+        <div className="filters fin-filters">
+          <div className="seg" role="group" aria-label="Período">
+            {PRESETS.map(([k, l]) => <button key={k} aria-pressed={preset === k} onClick={() => setP(k)}>{l}</button>)}
+          </div>
+          <label className="fin-date">De <input type="date" className="input" value={de} onChange={(e) => setD(0, e.target.value)} /></label>
+          <label className="fin-date">Até <input type="date" className="input" value={ate} onChange={(e) => setD(1, e.target.value)} /></label>
+          <select className="select" style={{ width: 170 }} value={categoria} onChange={(e) => setCategoria(e.target.value)} aria-label="Tipo de produto">
+            <option value="">Todos os tipos</option>
+            {cats.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <div className="seg" role="group" aria-label="Ordenar por">
+            <button aria-pressed={ordem === 'valor'} onClick={() => setOrdem('valor')}>Faturamento</button>
+            <button aria-pressed={ordem === 'qtd'} onClick={() => setOrdem('qtd')}>Quantidade</button>
+          </div>
+        </div>
+        <div className="fin-split">
+          <span>{dateBR(de)} a {dateBR(ate)} · <b>{R.dias}</b> dia{R.dias === 1 ? '' : 's'} com venda</span>
+          <span className="muted">Importado até {dateBR(ultimo)}</span>
+          {semCat > 0 && <button className="btn ghost sm" onClick={() => setEditCats(true)}><AlertTriangle />{semCat} produto{semCat > 1 ? 's' : ''} sem tipo</button>}
+          <button className="btn ghost sm" onClick={() => setEditCats(true)}><Pencil />Tipos dos produtos</button>
+        </div>
+      </div>
+
+      <div className="kpis">
+        <Kpi icon={Wallet} label="Faturamento dos produtos" value={money(R.total)} sub={categoria ? `Só ${categoria.toLowerCase()}` : 'Todos os tipos'} />
+        <Kpi icon={ChartBarBig} label="Itens vendidos" value={qtdFmt(R.qtdTotal)} sub={R.dias ? `${qtdFmt(R.qtdTotal / R.dias)} por dia` : '—'} />
+        <Kpi icon={CheckCircle2} label="Produtos com venda" value={R.rows.length} sub={`${R.semVenda.length} sem nenhuma venda no período`} tone={R.semVenda.length ? 'warn' : ''} />
+        <Kpi icon={Target} label={ordem === 'qtd' ? 'Mais vendido (unidades)' : 'Mais vendido (R$)'} value={lider ? nomeProd(lider.nome) : '—'} sub={lider ? `${fmtMetric(metric(lider))} · ${pct(lider.share)} do faturamento` : ''} />
+      </div>
+
+      <div className="fin-grid">
+        <div className="card">
+          <div className="card-head"><div><h3>Mais vendidos</h3><p>Os 10 que mais saem, por {ordem === 'qtd' ? 'quantidade' : 'faturamento'}{categoria ? '' : ' (sem extras, molhos e embalagem)'}.</p></div></div>
+          <div className="fin-mix">
+            {top.map((r, i) => (
+              <div key={r.codigo} className="fm-row prod-row">
+                <span title={r.nome}><i className="muted">{i + 1}.</i> {nomeProd(r.nome)}</span>
+                <div className="fm-bar"><span style={{ width: `${(metric(r) / maxTop) * 100}%`, background: 'var(--series-1)' }} /></div>
+                <b>{fmtMetric(metric(r))}</b>
+              </div>
+            ))}
+            {!top.length && <div className="empty"><Inbox /><div>Sem vendas no período.</div></div>}
+          </div>
+        </div>
+        <div className="card">
+          <div className="card-head"><div><h3>O que menos sai</h3><p>Os 10 com menos {ordem === 'qtd' ? 'unidades' : 'faturamento'}{categoria ? '' : ' no cardápio (sem extras, molhos e embalagem)'}.</p></div></div>
+          <div className="fin-mix">
+            {menos.map((r) => (
+              <div key={r.codigo} className="fm-row prod-row">
+                <span title={r.nome}>{nomeProd(r.nome)} <small className="muted">· {r.categoria}</small></span>
+                <div className="fm-bar"><span style={{ width: `${(metric(r) / maxMenos) * 100}%`, background: 'var(--st-warn)' }} /></div>
+                <b>{fmtMetric(metric(r))}</b>
+              </div>
+            ))}
+            {semVenda.length > 0 && (
+              <div className="prod-zero">
+                <small className="muted">Sem nenhuma venda no período (vendiam antes)</small>
+                <div>{semVenda.slice(0, 24).map((r) => <span key={r.codigo} className="pill warn" title={r.categoria}>{nomeProd(r.nome)}</span>)}{semVenda.length > 24 && <span className="pill">+{semVenda.length - 24}</span>}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginBottom: 12 }}>
+        <div className="card-head"><div><h3>Por tipo de produto</h3><p>Participação de cada tipo no faturamento. Clique para filtrar.</p></div>{categoria && <button className="btn sm" onClick={() => setCategoria('')}>Ver todos</button>}</div>
+        <div className="fin-mix prod-cats">
+          {R.porCategoria.map((c) => (
+            <button key={c.categoria} className={`fm-row prod-cat ${categoria === c.categoria ? 'on' : ''}`} onClick={() => setCategoria(categoria === c.categoria ? '' : c.categoria)}>
+              <span>{c.categoria}</span>
+              <div className="fm-bar"><span style={{ width: `${(c.share / maxCat) * 100}%`, background: 'var(--series-2)' }} /></div>
+              <b>{pct(c.share)}</b><small className="muted">{qtdFmt(c.qtd)} un · {moneyShort(c.valor)}</small>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-head">
+          <div><h3>Ranking completo</h3><p>Classe A soma os primeiros 80% do faturamento, B os 15% seguintes e C o resto.{R.temAnt ? ` A variação compara com ${dateBR(R.antDe)} a ${dateBR(R.antAte)}.` : ''}</p></div>
+          <input className="input" style={{ maxWidth: 220 }} placeholder="Buscar produto" value={busca} onChange={(e) => setBusca(e.target.value)} aria-label="Buscar produto" />
+        </div>
+        <div className="table-wrap" style={{ maxHeight: '62vh' }}>
+          <table className="data">
+            <thead><tr><th className="num">#</th><th>Produto</th><th className="hide-sm">Tipo</th><th className="num">Qtd</th><th className="num">Faturamento</th><th className="num hide-sm">% do total</th><th>Classe</th><th className="num hide-sm">Variação</th></tr></thead>
+            <tbody>
+              {tabela.map((r) => (
+                <tr key={r.codigo}>
+                  <td className="num muted">{ordenados.indexOf(r) + 1}</td>
+                  <td><strong>{nomeProd(r.nome)}</strong> <small className="muted">{r.codigo}</small></td>
+                  <td className="hide-sm muted">{r.categoria}</td>
+                  <td className="num">{qtdFmt(r.qtd)}</td>
+                  <td className="num"><strong>{money(r.valor)}</strong></td>
+                  <td className="num hide-sm">{pct(r.share)}</td>
+                  <td><span className={`pill ${CLASSE_PILL[r.classe] || ''}`}>{r.classe}</span></td>
+                  <td className={`num hide-sm ${r.varQtd > 0 ? 'txt-good' : r.varQtd < 0 ? 'txt-danger' : 'muted'}`}>{r.novo ? 'novo' : r.varQtd == null ? '—' : pctS(r.varQtd)}</td>
+                </tr>
+              ))}
+              {!tabela.length && <tr><td colSpan={8}><div className="empty"><Inbox /><div>Nenhum produto.</div></div></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <details className="fin-foot">
+        <summary>De onde vêm esses números</summary>
+        <p>Do relatório Itens vendidos → Dia a Dia do 3LM (por data de caixa, com faturamento). A quantidade é a coluna "Qtde"; no Número 1 Promo ela conta cada lanche, por isso passa da quantidade de lançamentos. Itens sem preço (molhos cortesia) entram na quantidade mas não no faturamento. Reimportar um dia substitui o que havia nele.</p>
+      </details>
+      {editCats && <CategoriasForm store={ctx.store} itens={itens} produtos={produtos} onClose={() => setEditCats(false)} />}
+    </>
+  )
+}
+
+function CategoriasForm({ store, itens, produtos, onClose }) {
+  const toast = useToast()
+  const lista = useMemo(() => {
+    const m = new Map(); for (const r of itens) m.set(r.codigo, r.nome)
+    return [...m].map(([codigo, nome]) => ({ codigo, nome: produtos[codigo]?.nome || nome, categoria: categoriaDe(codigo, produtos) }))
+      .sort((a, b) => (a.categoria === SEM_CAT ? -1 : 0) - (b.categoria === SEM_CAT ? -1 : 0) || a.categoria.localeCompare(b.categoria) || a.nome.localeCompare(b.nome))
+  }, [itens, produtos])
+  const [cat, setCat] = useState(() => Object.fromEntries(lista.map((p) => [p.codigo, p.categoria])))
+  const [busy, setBusy] = useState(false)
+  const mudou = lista.filter((p) => cat[p.codigo] !== p.categoria)
+  const opcoes = [...new Set([...CATS_PRODUTO, ...lista.map((p) => p.categoria).filter((c) => c !== SEM_CAT)])]
+  const save = async () => {
+    setBusy(true)
+    try {
+      const rows = mudou.map((p) => ({ codigo: p.codigo, nome: p.nome, categoria: cat[p.codigo] }))
+      await api.finSaveProdutos(rows)
+      store.setFin((f) => { const m = new Map((f.produtos || []).map((p) => [p.codigo, p])); rows.forEach((r) => m.set(r.codigo, r)); return { ...f, produtos: [...m.values()] } })
+      toast('Tipos atualizados.'); onClose()
+    } catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
+  }
+  return (
+    <Modal title="Tipos dos produtos" onClose={onClose} wide
+      footer={<><button className="btn" onClick={onClose}>Cancelar</button><button className="btn primary" disabled={busy || !mudou.length} onClick={save}>{busy ? 'Salvando…' : `Salvar${mudou.length ? ` (${mudou.length})` : ''}`}</button></>}>
+      <p className="hint" style={{ marginTop: 0 }}>O tipo vem das categorias do 3LM. Produto novo aparece como "{SEM_CAT}" até você escolher o tipo aqui.</p>
+      <div className="table-wrap" style={{ maxHeight: '55vh' }}>
+        <table className="data">
+          <thead><tr><th>Código</th><th>Produto</th><th>Tipo</th></tr></thead>
+          <tbody>
+            {lista.map((p) => (
+              <tr key={p.codigo} className={cat[p.codigo] === SEM_CAT ? 'selected' : ''}>
+                <td className="muted">{p.codigo}</td>
+                <td>{nomeProd(p.nome)}</td>
+                <td>
+                  <select className="select" value={cat[p.codigo]} onChange={(e) => setCat((c) => ({ ...c, [p.codigo]: e.target.value }))} aria-label={`Tipo de ${p.nome}`}>
+                    {cat[p.codigo] === SEM_CAT && <option value={SEM_CAT}>{SEM_CAT}</option>}
+                    {opcoes.map((o) => <option key={o} value={o}>{o}</option>)}
+                  </select>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Modal>
+  )
+}
+
+// =====================================================================
 // DRE
 // =====================================================================
 function Dre({ ctx }) {
@@ -546,14 +775,26 @@ function Fixos({ ctx }) {
 // =====================================================================
 // Importar dados do 3LM (JSON da extração: títulos, vendas ou histórico)
 // =====================================================================
-const IMPORT_LABEL = { lancamentos: 'contas a pagar', vendas: 'vendas por dia', historico: 'faturamento mensal' }
+const IMPORT_LABEL = { lancamentos: 'contas a pagar', vendas: 'vendas por dia', historico: 'faturamento mensal', itens: 'itens vendidos por dia', produtos: 'tipos de produto' }
+const lerTexto = async (file) => {
+  const buf = await file.arrayBuffer()
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf) } catch { return new TextDecoder('windows-1252').decode(buf) }
+}
 function ImportFin({ store, onClose }) {
   const toast = useToast()
   const [files, setFiles] = useState([])
   const [busy, setBusy] = useState(false)
+  const [unidade, setUnidade] = useState('ZN Salão')
   const read = async (list) => {
     const out = []
     for (const file of list) {
+      if (!/\.json$/i.test(file.name)) {
+        const p = parse3lmItens(await lerTexto(file))
+        if (p?.kind === 'itens') out.push({ name: file.name, kind: 'itens', rows: p.itens, dias: p.dias })
+        else if (p?.kind === 'produtos') out.push({ name: file.name, kind: 'produtos', rows: p.produtos })
+        else out.push({ name: file.name, kind: null, rows: [] })
+        continue
+      }
       try {
         const rows = JSON.parse(await file.text())
         const arr = Array.isArray(rows) ? rows : rows.rows || rows.data || []
@@ -571,7 +812,11 @@ function ImportFin({ store, onClose }) {
   const go = async () => {
     setBusy(true)
     try {
-      for (const f of files.filter((x) => x.kind)) await api.finImport(f.kind, f.rows.map(clean[f.kind]))
+      for (const f of files.filter((x) => x.kind)) {
+        if (f.kind === 'itens') await api.finImportItens(unidade, f.dias, f.rows.map((r) => ({ ...r, unidade })))
+        else if (f.kind === 'produtos') await api.finSaveProdutos(f.rows)
+        else await api.finImport(f.kind, f.rows.map(clean[f.kind]))
+      }
       store.setFin(await api.finLoad())
       toast('Dados importados.'); onClose()
     } catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
@@ -580,12 +825,19 @@ function ImportFin({ store, onClose }) {
     <Modal title="Importar dados do 3LM" onClose={onClose}
       footer={<><button className="btn" onClick={onClose}>Cancelar</button><button className="btn primary" disabled={busy || !files.some((f) => f.kind)} onClick={go}>{busy ? 'Importando…' : 'Importar'}</button></>}>
       <div className="stack">
-        <p className="hint" style={{ margin: 0 }}>Escolha os arquivos .json extraídos do 3LM (contas a pagar, vendas por dia ou faturamento mensal). O que já existe é atualizado pelo código do título, sem duplicar, e os pagamentos já marcados continuam marcados.</p>
-        <input type="file" accept=".json,application/json" multiple onChange={(e) => read([...e.target.files])} />
+        <p className="hint" style={{ margin: 0 }}>Escolha os arquivos do 3LM: os .json extraídos (contas a pagar, vendas por dia ou faturamento mensal) ou o CSV de <b>Itens vendidos → Dia a Dia</b> (exportado em "Delimitador ;"). Nada é duplicado: títulos são atualizados pelo código, os pagamentos marcados continuam marcados, e os dias de itens vendidos que vierem no arquivo são substituídos.</p>
+        <input type="file" accept=".json,.csv,.txt,application/json,text/csv,text/plain" multiple onChange={(e) => read([...e.target.files])} />
+        {files.some((f) => f.kind === 'itens') && (
+          <label className="fin-date">Unidade dos itens vendidos
+            <select className="select" style={{ width: 170 }} value={unidade} onChange={(e) => setUnidade(e.target.value)}>
+              {UNIDADES.filter((u) => !/Legado/.test(u)).map((u) => <option key={u} value={u}>{u}</option>)}
+            </select>
+          </label>
+        )}
         {files.map((f) => (
           <div key={f.name} className={`note ${f.kind ? '' : 'warn'}`}>
             {f.kind ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
-            <span><strong>{f.name}</strong>: {f.kind ? `${f.rows.length} linhas de ${IMPORT_LABEL[f.kind]}` : 'formato não reconhecido'}</span>
+            <span><strong>{f.name}</strong>: {f.kind === 'itens' ? `${f.rows.length} itens vendidos de ${dateBR(f.dias[0])} a ${dateBR(f.dias[f.dias.length - 1])}` : f.kind ? `${f.rows.length} linhas de ${IMPORT_LABEL[f.kind]}` : 'formato não reconhecido'}</span>
           </div>
         ))}
       </div>
