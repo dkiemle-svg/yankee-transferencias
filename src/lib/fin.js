@@ -252,6 +252,10 @@ const CAT_POR_CODIGO = Object.fromEntries(Object.entries(CAT_PADRAO).flatMap(([c
 const CAT_3LM = { BEBIDAS: 'Bebidas', BURGERS: 'Burgers', BATATAS: 'Batatas', 'HOT DOGS': 'Hot dogs', 'MILK SHAKE': 'Milk shake', EXTRAS: 'Extras',
   EMBALAGEM: 'Embalagem', MOLHOS: 'Molhos', SOBREMESAS: 'Sobremesas', COMBOS: 'Combos' }
 export const SEM_CAT = 'Sem categoria'
+// Refil é lançado em produtos diferentes (Coca, Coca Zero, Fanta…): soma tudo numa linha só
+const REFIL = { codigo: 'REFIL', nome: 'REFIL - GERAL' }
+CAT_POR_CODIGO.REFIL = 'Bebidas'
+export const agrupa = (codigo, nome) => (/\bREFILL?\b/i.test(nome || '') ? REFIL : { codigo, nome })
 
 export function categoriaDe(codigo, produtos) {
   return produtos?.[codigo]?.categoria || CAT_POR_CODIGO[codigo] || SEM_CAT
@@ -297,8 +301,9 @@ export function rankingProdutos(itens, produtos, { de, ate, unidade = 'Todas', c
   const antAte = addDaysISO(de, -1); const antDe = addDaysISO(de, -nDias)
   const cur = new Map(); const ant = new Map(); const nomes = new Map(); const visto = new Set()
   const diasCom = new Set()
-  for (const r of itens) {
-    if (!ok(r)) continue
+  for (const it of itens) {
+    if (!ok(it)) continue
+    const r = { ...it, ...agrupa(it.codigo, it.nome) }
     nomes.set(r.codigo, r.nome); visto.add(r.codigo)
     const cat = categoriaDe(r.codigo, produtos)
     if (categoria && cat !== categoria) continue
