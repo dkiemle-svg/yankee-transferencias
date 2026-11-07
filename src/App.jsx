@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeftRight, LayoutDashboard, Package, LogOut, Moon, Sun, KeyRound, ClipboardList, ListChecks, Users, Trophy, Home as HomeIcon, Salad, FileChartColumn, Landmark, Gauge, ReceiptText, TrendingUp, Table2, Repeat } from 'lucide-react'
+import { ArrowLeftRight, LayoutDashboard, Package, LogOut, Moon, Sun, KeyRound, ClipboardList, ListChecks, Users, Trophy, Home as HomeIcon, Salad, FileChartColumn, Landmark, Gauge, ReceiptText, TrendingUp, Table2, Repeat, ChartBarBig } from 'lucide-react'
 import { api, DEMO } from './lib/api.js'
 import { ToastProvider, ConfirmProvider, Modal, useToast } from './components/ui.jsx'
 import Login from './pages/Login.jsx'
@@ -35,11 +35,12 @@ export const PANELS = [
   {
     // restricted: só aparece para quem tem 'financeiro' em access (ser master não basta)
     key: 'financeiro', name: 'Financeiro', icon: Landmark, owner: 'Daniel · Direção', restricted: true,
-    desc: 'Contas a pagar do dia, vendas e meta do mês, DRE gerencial e custos fixos.',
+    desc: 'Contas a pagar do dia, vendas e meta do mês, produtos vendidos, DRE gerencial e custos fixos.',
     tabs: [
       { id: 'fin-visao', label: 'Visão geral', icon: Gauge },
       { id: 'fin-pagar', label: 'Contas a pagar', icon: ReceiptText },
       { id: 'fin-vendas', label: 'Vendas e meta', icon: TrendingUp },
+      { id: 'fin-produtos', label: 'Produtos', icon: ChartBarBig },
       { id: 'fin-dre', label: 'DRE', icon: Table2 },
       { id: 'fin-fixos', label: 'Custos fixos', icon: Repeat },
     ],
