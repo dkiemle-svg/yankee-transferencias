@@ -150,12 +150,13 @@ function supabaseApi() {
         }
         return out
       }
-      const [lancamentos, pagamentos, custos_fixos, vendas, historico] = await Promise.all([
+      const opt = (p) => p.catch(() => []) // tabelas de produtos podem ainda não existir
+      const [lancamentos, pagamentos, custos_fixos, vendas, historico, itens, produtos] = await Promise.all([
         all('fin_lancamentos', 'vencimento'), all('fin_pagamentos', 'id'), all('fin_custos_fixos', 'created_at'),
-        all('fin_vendas', 'dia'), all('fin_historico', 'mes'),
+        all('fin_vendas', 'dia'), all('fin_historico', 'mes'), opt(all('fin_itens', 'dia')), opt(all('fin_produtos', 'codigo')),
       ])
       const n = (rows, ...ks) => rows.map((r) => { const o = { ...r }; ks.forEach((k) => { if (o[k] != null) o[k] = Number(o[k]) }); return o })
-      return { lancamentos: n(lancamentos, 'valor'), pagamentos, custos_fixos: n(custos_fixos, 'valor', 'dia'), vendas: n(vendas, 'valor'), historico: n(historico, 'total', 'promo_valor') }
+      return { lancamentos: n(lancamentos, 'valor'), pagamentos, custos_fixos: n(custos_fixos, 'valor', 'dia'), vendas: n(vendas, 'valor'), historico: n(historico, 'total', 'promo_valor'), itens: n(itens, 'qtd', 'qtd_lanc', 'valor'), produtos }
     },
     async finSetPago(ids, data) {
       if (data) ok(await sb.from('fin_pagamentos').upsert(ids.map((id) => ({ id, data, at: new Date().toISOString() }))))
@@ -173,6 +174,15 @@ function supabaseApi() {
       const table = { lancamentos: 'fin_lancamentos', vendas: 'fin_vendas', historico: 'fin_historico' }[kind]
       const onConflict = { lancamentos: 'id', vendas: 'dia,unidade,forma', historico: 'mes,unidade' }[kind]
       for (let i = 0; i < rows.length; i += 500) ok(await sb.from(table).upsert(rows.slice(i, i + 500), { onConflict }))
+    },
+    // Itens vendidos: troca os dias do arquivo inteiros (o que sumiu do 3LM some daqui também)
+    async finImportItens(unidade, dias, rows) {
+      ok(await sb.from('fin_itens').delete().eq('unidade', unidade).in('dia', dias))
+      for (let i = 0; i < rows.length; i += 500) ok(await sb.from('fin_itens').insert(rows.slice(i, i + 500)))
+    },
+    async finSaveProdutos(rows) {
+      const at = new Date().toISOString()
+      for (let i = 0; i < rows.length; i += 500) ok(await sb.from('fin_produtos').upsert(rows.slice(i, i + 500).map((r) => ({ ...r, updated_at: at })), { onConflict: 'codigo' }))
     },
   }
 
@@ -198,6 +208,7 @@ function demoApi() {
     if (fin) return fin
     try { const raw = localStorage.getItem(KEY_FIN); if (raw) fin = JSON.parse(raw) } catch { /* */ }
     if (!fin) { fin = { lancamentos: [], pagamentos: [], custos_fixos: [], vendas: [], historico: [] }; saveFin() }
+    fin.itens ||= []; fin.produtos ||= []
     return fin
   }
   const KEY_AS = 'yankee-demo-as'
@@ -364,6 +375,12 @@ function demoApi() {
       const f = loadFin()
       const key = { lancamentos: (r) => r.id, vendas: (r) => `${r.dia}|${r.unidade}|${r.forma}`, historico: (r) => `${r.mes}|${r.unidade}` }[kind]
       const m = new Map(f[kind].map((r) => [key(r), r])); rows.forEach((r) => m.set(key(r), r)); f[kind] = [...m.values()]; saveFin()
+    },
+    async finImportItens(unidade, dias, rows) {
+      const f = loadFin(); f.itens = [...f.itens.filter((r) => !(r.unidade === unidade && dias.includes(r.dia))), ...rows]; saveFin()
+    },
+    async finSaveProdutos(rows) {
+      const f = loadFin(); const m = new Map(f.produtos.map((p) => [p.codigo, p])); rows.forEach((r) => m.set(r.codigo, r)); f.produtos = [...m.values()]; saveFin()
     },
     async saveProfile(p) { await load(); Object.assign(db.profiles.find((x) => x.id === p.id), { role: p.role, unit_id: p.unit_id || null, name: p.name }); save() },
   }

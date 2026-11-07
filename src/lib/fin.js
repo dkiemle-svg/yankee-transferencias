@@ -232,3 +232,101 @@ export function detectImport(rows) {
   if (k.includes('mes') && k.includes('total')) return 'historico'
   return null
 }
+
+// ---------------------------------------------------------------------
+// Produtos vendidos (3LM → Relatórios → Itens vendidos)
+// ---------------------------------------------------------------------
+export const CATS_PRODUTO = ['Burgers', 'Batatas', 'Bebidas', 'Milk shake', 'Hot dogs', 'Extras', 'Molhos', 'Embalagem', 'Sobremesas', 'Combos', 'Outros']
+// Categorias da 3LM (relatório sintético de out/2026). Produto novo cai em "Sem categoria" até ser classificado.
+const CAT_PADRAO = {
+  Bebidas: [1001, 1004, 1005, 1006, 1008, 1009, 1010, 1011, 1012, 1013, 1014, 1015, 1016, 1018, 1019, 1020, 1021, 10022],
+  Burgers: [2001, 2002, 2003, 2004, 2005, 2006, 2011, 2012, 2013, 2014, 2015, 2020, 2021, 2022, 2024, 2025, 10004, 10009, 10010, 10012, 10013],
+  Batatas: [1201, 3001, 3002, 3003, 3007],
+  'Hot dogs': [4001, 4002],
+  'Milk shake': [6001, 6002, 6003, 6004, 10003],
+  Extras: [2007, 2008, 2009, 7001, 7002, 7003, 7004, 7005, 7006, 7007, 7008, 7009, 7010, 7011, 7018, 10018, 10020],
+  Embalagem: [8001],
+  Molhos: [1202, 1203, 1204],
+}
+const CAT_POR_CODIGO = Object.fromEntries(Object.entries(CAT_PADRAO).flatMap(([c, cods]) => cods.map((k) => [String(k), c])))
+const CAT_3LM = { BEBIDAS: 'Bebidas', BURGERS: 'Burgers', BATATAS: 'Batatas', 'HOT DOGS': 'Hot dogs', 'MILK SHAKE': 'Milk shake', EXTRAS: 'Extras',
+  EMBALAGEM: 'Embalagem', MOLHOS: 'Molhos', SOBREMESAS: 'Sobremesas', COMBOS: 'Combos' }
+export const SEM_CAT = 'Sem categoria'
+
+export function categoriaDe(codigo, produtos) {
+  return produtos?.[codigo]?.categoria || CAT_POR_CODIGO[codigo] || SEM_CAT
+}
+
+const numBR = (x) => Number(String(x || '').replace(/R\$\s?/i, '').replace(/\./g, '').replace(',', '.').trim()) || 0
+
+/**
+ * Lê o CSV ("Delimitador ;") do 3LM.
+ * - Itens vendidos → Dia a Dia: devolve { kind: 'itens', itens: [{dia, codigo, nome, qtd, qtd_lanc, valor}], dias }
+ * - Itens vendidos → Sintético: devolve { kind: 'produtos', produtos: [{codigo, nome, categoria}] }
+ */
+export function parse3lmItens(texto) {
+  const linhas = String(texto || '').replace(/^﻿/, '').split(/\r?\n/).map((l) => l.split(';').map((c) => c.trim()))
+  const head = linhas.find((c) => /^c[oó]digo$/i.test(c[0]) && /descri/i.test(c[1] || ''))
+  if (!head) return null
+  const sintetico = head.some((c) => /categ/i.test(c))
+  const itens = []; const produtos = new Map()
+  let dia = null; let cat = null
+  for (const c of linhas) {
+    const d = /^(\d{2})\/(\d{2})\/(\d{4})\b/.exec(c[0])
+    if (d && c.filter(Boolean).length === 1) { dia = `${d[3]}-${d[2]}-${d[1]}`; continue }
+    if (/^\d+$/.test(c[0]) && c[1] && !/^[\d.,\sR$]+$/.test(c[1])) {
+      const codigo = c[0]; const nome = c[1].replace(/\s+/g, ' ')
+      if (sintetico) { produtos.set(codigo, { codigo, nome, categoria: cat || categoriaDe(codigo) }); continue }
+      if (!dia) continue
+      itens.push({ dia, codigo, nome, qtd_lanc: numBR(c[2]), qtd: numBR(c[3]), valor: numBR(c[4]) })
+      continue
+    }
+    // Linha só com o nome da categoria (relatório sintético)
+    if (sintetico && c[0] && c.filter(Boolean).length === 1 && !/total|per[ií]odo|yankee|^\d/i.test(c[0])) {
+      const k = c[0].toUpperCase(); cat = CAT_3LM[k] || (k.charAt(0) + k.slice(1).toLowerCase())
+    }
+  }
+  if (sintetico) return produtos.size ? { kind: 'produtos', produtos: [...produtos.values()] } : null
+  return itens.length ? { kind: 'itens', itens, dias: [...new Set(itens.map((i) => i.dia))].sort() } : null
+}
+
+/** Ranking de produtos no período, com curva ABC e comparação com o período anterior de mesmo tamanho. */
+export function rankingProdutos(itens, produtos, { de, ate, unidade = 'Todas', categoria = '' }) {
+  const ok = okUnidade(unidade)
+  const nDias = Math.round((new Date(`${ate}T00:00:00Z`) - new Date(`${de}T00:00:00Z`)) / 864e5) + 1
+  const antAte = addDaysISO(de, -1); const antDe = addDaysISO(de, -nDias)
+  const cur = new Map(); const ant = new Map(); const nomes = new Map(); const visto = new Set()
+  const diasCom = new Set()
+  for (const r of itens) {
+    if (!ok(r)) continue
+    nomes.set(r.codigo, r.nome); visto.add(r.codigo)
+    const cat = categoriaDe(r.codigo, produtos)
+    if (categoria && cat !== categoria) continue
+    const alvo = r.dia >= de && r.dia <= ate ? cur : r.dia >= antDe && r.dia <= antAte ? ant : null
+    if (!alvo) continue
+    if (alvo === cur) diasCom.add(r.dia)
+    const o = alvo.get(r.codigo) || { qtd: 0, valor: 0 }
+    o.qtd += Number(r.qtd); o.valor += Number(r.valor); alvo.set(r.codigo, o)
+  }
+  const total = [...cur.values()].reduce((t, o) => t + o.valor, 0)
+  const qtdTotal = [...cur.values()].reduce((t, o) => t + o.qtd, 0)
+  const temAnt = ant.size > 0
+  let acum = 0
+  const rows = [...cur].map(([codigo, o]) => ({ codigo, nome: produtos?.[codigo]?.nome || nomes.get(codigo), categoria: categoriaDe(codigo, produtos), ...o }))
+    .sort((a, b) => b.valor - a.valor || b.qtd - a.qtd)
+    .map((r) => {
+      const share = total ? r.valor / total : 0
+      const antes = acum; acum += share
+      const a = ant.get(r.codigo)
+      return { ...r, share, classe: r.valor <= 0 ? '—' : antes < 0.8 ? 'A' : antes < 0.95 ? 'B' : 'C',
+        qtdAnt: a?.qtd || 0, varQtd: temAnt && a?.qtd ? r.qtd / a.qtd - 1 : null, novo: temAnt && !a }
+    })
+  // Vendidos antes (em qualquer data) e parados no período
+  const semVenda = [...visto].filter((k) => !cur.has(k) && (!categoria || categoriaDe(k, produtos) === categoria))
+    .map((codigo) => ({ codigo, nome: produtos?.[codigo]?.nome || nomes.get(codigo), categoria: categoriaDe(codigo, produtos), qtdAnt: ant.get(codigo)?.qtd || 0 }))
+    .sort((a, b) => b.qtdAnt - a.qtdAnt || a.nome.localeCompare(b.nome))
+  const cats = new Map()
+  for (const r of rows) { const c = cats.get(r.categoria) || { categoria: r.categoria, valor: 0, qtd: 0, itens: 0 }; c.valor += r.valor; c.qtd += r.qtd; c.itens++; cats.set(r.categoria, c) }
+  const porCategoria = [...cats.values()].map((c) => ({ ...c, share: total ? c.valor / total : 0 })).sort((a, b) => b.valor - a.valor || b.qtd - a.qtd)
+  return { rows, total: r2(total), qtdTotal, porCategoria, semVenda, dias: diasCom.size, nDias, temAnt, antDe, antAte }
+}
