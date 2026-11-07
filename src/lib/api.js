@@ -7,6 +7,35 @@ import { SUPABASE_URL as URL, SUPABASE_KEY as KEY, toEmail } from '../config.js'
 
 export const DEMO = import.meta.env.MODE === 'demo' || !URL || !KEY || URL.startsWith('__')
 
+// Estoque: a partir de quando as saídas são calculadas
+export const EST_INICIO = '2026-11-01'
+function normEst(d) {
+  const n = (rows, ...ks) => rows.map((r) => { const o = { ...r }; ks.forEach((k) => { if (o[k] != null) o[k] = Number(o[k]) }); return o })
+  const itens = n(d.itensCont, 'qtd')
+  return {
+    insumos: n(d.insumos, 'litros', 'preco_medio', 'preco_ultimo', 'estoque_min', 'tolerancia'),
+    pratos: n(d.pratos, 'preco_venda'), fichas: n(d.fichas, 'qtd'), fichasProd: n(d.fichasProd, 'qtd'),
+    movs: n(d.movs, 'qtd', 'custo_unit'), transfMap: n(d.transfMap, 'fator'),
+    contagens: d.contagens.map((c) => ({ ...c, itens: itens.filter((i) => i.contagem_id === c.id) })),
+    saidas: n(d.saidas, 'qtd', 'origem_qtd'), vendas: n(d.vendas, 'qtd'),
+  }
+}
+/** Saídas calculadas no navegador (modo demonstração), igual à função est_saidas do banco. */
+function saidasLocal({ itens, fichas, transfers, transfMap, units, de }) {
+  const out = []
+  const fx = new Map(); fichas.forEach((f) => { if (!fx.has(f.produto_codigo)) fx.set(f.produto_codigo, []); fx.get(f.produto_codigo).push(f) })
+  for (const i of itens) {
+    if (i.dia < de || i.unidade !== 'ZN Salão') continue
+    for (const f of fx.get(i.codigo) || []) out.push({ dia: i.dia, insumo_codigo: f.insumo_codigo, tipo: 'venda', qtd: i.qtd * f.qtd, origem: `${i.codigo} ${i.nome}`, origem_qtd: i.qtd })
+  }
+  const mp = new Map(transfMap.map((m) => [m.product_name, m])); const ub = new Map(units.map((u) => [u.id, u]))
+  for (const t of transfers) {
+    const m = mp.get(t.product_name); if (!m || t.date < de || ub.get(t.origin_id)?.is_hub) continue
+    out.push({ dia: t.date, insumo_codigo: m.insumo_codigo, tipo: 'transferencia', qtd: Number(t.quantity) * m.fator, origem: `${t.product_name} → ${ub.get(t.destination_id)?.name || ''}`, origem_qtd: Number(t.quantity) })
+  }
+  return out
+}
+
 const withTotal = (t) => ({ ...t, quantity: Number(t.quantity), unit_price: Number(t.unit_price), total: round2(Number(t.quantity) * Number(t.unit_price)) })
 
 // =====================================================================
@@ -184,6 +213,60 @@ function supabaseApi() {
       const at = new Date().toISOString()
       for (let i = 0; i < rows.length; i += 500) ok(await sb.from('fin_produtos').upsert(rows.slice(i, i + 500).map((r) => ({ ...r, updated_at: at })), { onConflict: 'codigo' }))
     },
+
+    // ----- Painel de Estoque -----
+    async estLoad(de = EST_INICIO) {
+      const all = async (table, order) => {
+        const out = []
+        for (let from = 0; ; from += 1000) {
+          const page = ok(await sb.from(table).select('*').order(order).range(from, from + 999))
+          out.push(...page); if (page.length < 1000) break
+        }
+        return out
+      }
+      const rpc = async (fn, args) => ok(await sb.rpc(fn, args))
+      const [insumos, pratos, fichas, fichasProd, movs, contagens, itensCont, transfMap, saidas, vendas] = await Promise.all([
+        all('est_insumos', 'codigo'), all('est_pratos', 'codigo'), all('est_fichas', 'produto_codigo'), all('est_fichas_producao', 'processado_codigo'),
+        all('est_movs', 'dia'), all('est_contagens', 'corte'), all('est_contagem_itens', 'contagem_id'), all('est_transf_map', 'product_name'),
+        rpc('est_saidas', { de }), rpc('est_vendas', { de }),
+      ])
+      return normEst({ insumos, pratos, fichas, fichasProd, movs, contagens, itensCont, transfMap, saidas, vendas })
+    },
+    async estProdutosTransf() { return ok(await sb.rpc('est_produtos_transf')) },
+    async estImport3lm({ insumos, existentes, pratos, linhas }) {
+      const at = new Date().toISOString()
+      const novos = insumos.filter((i) => !existentes.has(i.codigo))
+      const velhos = insumos.filter((i) => existentes.has(i.codigo)).map(({ ativo, litros, ...r }) => ({ ...r, updated_at: at }))
+      for (let i = 0; i < novos.length; i += 500) ok(await sb.from('est_insumos').insert(novos.slice(i, i + 500)))
+      for (let i = 0; i < velhos.length; i += 500) ok(await sb.from('est_insumos').upsert(velhos.slice(i, i + 500), { onConflict: 'codigo' }))
+      if (pratos?.length) {
+        ok(await sb.from('est_pratos').upsert(pratos.map(({ codigo, nome, secao, preco_venda }) => ({ codigo, nome, secao, preco_venda, updated_at: at })), { onConflict: 'codigo' }))
+        ok(await sb.from('est_fichas').delete().in('produto_codigo', pratos.map((p) => p.codigo)))
+        for (let i = 0; i < linhas.length; i += 500) ok(await sb.from('est_fichas').insert(linhas.slice(i, i + 500)))
+      }
+    },
+    async estSaveInsumo(codigo, patch) { ok(await sb.from('est_insumos').update({ ...patch, updated_at: new Date().toISOString() }).eq('codigo', codigo)) },
+    async estSavePrato(codigo, patch) { ok(await sb.from('est_pratos').update(patch).eq('codigo', codigo)) },
+    async estAddMovs(rows) { return ok(await sb.from('est_movs').insert(rows).select()) },
+    async estDeleteMov(m) { ok(m.lote ? await sb.from('est_movs').delete().eq('lote', m.lote) : await sb.from('est_movs').delete().eq('id', m.id)) },
+    async estNovaContagem(corte) { return ok(await sb.from('est_contagens').insert({ corte }).select().single()) },
+    async estContar(contagem_id, insumo_codigo, qtd) {
+      if (qtd == null) ok(await sb.from('est_contagem_itens').delete().eq('contagem_id', contagem_id).eq('insumo_codigo', insumo_codigo))
+      else ok(await sb.from('est_contagem_itens').upsert({ contagem_id, insumo_codigo, qtd, at: new Date().toISOString() }))
+    },
+    async estFecharContagem(id, aberta = false) {
+      const s = await this.session()
+      ok(await sb.from('est_contagens').update(aberta ? { status: 'aberta', fechada_em: null, fechada_por: null } : { status: 'fechada', fechada_em: new Date().toISOString(), fechada_por: s?.user?.id }).eq('id', id))
+    },
+    async estExcluirContagem(id) { ok(await sb.from('est_contagens').delete().eq('id', id)) },
+    async estSaveFichaProducao(processado, linhas) {
+      ok(await sb.from('est_fichas_producao').delete().eq('processado_codigo', processado))
+      if (linhas.length) ok(await sb.from('est_fichas_producao').insert(linhas.map((l) => ({ processado_codigo: processado, insumo_codigo: l.insumo_codigo, qtd: l.qtd }))))
+    },
+    async estSaveTransfMap(product_name, insumo_codigo, fator) {
+      if (!insumo_codigo) ok(await sb.from('est_transf_map').delete().eq('product_name', product_name))
+      else ok(await sb.from('est_transf_map').upsert({ product_name, insumo_codigo, fator }))
+    },
   }
 
   async function signPhotos(reports) {
@@ -210,6 +293,15 @@ function demoApi() {
     if (!fin) { fin = { lancamentos: [], pagamentos: [], custos_fixos: [], vendas: [], historico: [] }; saveFin() }
     fin.itens ||= []; fin.produtos ||= []
     return fin
+  }
+  const KEY_EST = 'yankee-demo-est-v1'
+  let est = null
+  const saveEst = () => { try { localStorage.setItem(KEY_EST, JSON.stringify(est)) } catch { /* */ } }
+  const loadEst = () => {
+    if (est) return est
+    try { const raw = localStorage.getItem(KEY_EST); if (raw) est = JSON.parse(raw) } catch { /* */ }
+    if (!est) { est = { insumos: [], pratos: [], fichas: [], fichasProd: [], movs: [], contagens: [], itensCont: [], transfMap: [] }; saveEst() }
+    return est
   }
   const KEY_AS = 'yankee-demo-as'
   const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36))
@@ -267,7 +359,7 @@ function demoApi() {
     onAuth() { return () => {} },
     async signIn() {}, async signUp() {}, async resetPassword() {}, async updatePassword() {}, async signOut() {},
     async viewAs(id) { try { localStorage.setItem(KEY_AS, id) } catch { /* */ } },
-    async resetDemo() { try { localStorage.removeItem(KEY_DB); localStorage.removeItem(KEY_NUTRI); localStorage.removeItem(KEY_FIN) } catch { /* */ } db = null; nutri = null; fin = null; await load() },
+    async resetDemo() { try { localStorage.removeItem(KEY_DB); localStorage.removeItem(KEY_NUTRI); localStorage.removeItem(KEY_FIN); localStorage.removeItem(KEY_EST) } catch { /* */ } db = null; nutri = null; fin = null; est = null; await load() },
 
     async profile() { await load(); return { ...me() } },
     async savePrefs(prefs) { await load(); me().prefs = prefs; save() },
@@ -382,6 +474,41 @@ function demoApi() {
     async finSaveProdutos(rows) {
       const f = loadFin(); const m = new Map(f.produtos.map((p) => [p.codigo, p])); rows.forEach((r) => m.set(r.codigo, r)); f.produtos = [...m.values()]; saveFin()
     },
+
+    // ----- Estoque (demonstração) -----
+    async estLoad(de = EST_INICIO) {
+      await load(); const e = loadEst(); const f = loadFin()
+      const saidas = saidasLocal({ itens: f.itens, fichas: e.fichas, transfers: db.transfers, transfMap: e.transfMap, units: db.units, de })
+      return delay(clone(normEst({ ...e, fichasProd: e.fichasProd, itensCont: e.itensCont, saidas, vendas: f.itens.filter((i) => i.dia >= de && i.unidade === 'ZN Salão') })))
+    },
+    async estProdutosTransf() {
+      await load(); const m = new Map()
+      for (const t of db.transfers) { const p = db.products.find((x) => x.id === t.product_id); const o = m.get(t.product_name) || { product_name: t.product_name, unit: p?.unit || '', qtd: 0 }; o.qtd += Number(t.quantity); m.set(t.product_name, o) }
+      return [...m.values()]
+    },
+    async estImport3lm({ insumos, existentes, pratos, linhas }) {
+      const e = loadEst(); const m = new Map(e.insumos.map((i) => [i.codigo, i]))
+      insumos.forEach((i) => { const old = m.get(i.codigo); m.set(i.codigo, old ? { ...old, ...i, ativo: old.ativo, litros: old.litros ?? i.litros } : { estoque_min: 0, tolerancia: 0.03, ...i }) })
+      e.insumos = [...m.values()]
+      if (pratos?.length) {
+        const pm = new Map(e.pratos.map((p) => [p.codigo, p])); pratos.forEach((p) => pm.set(p.codigo, { estrategico: false, ...pm.get(p.codigo), ...p })); e.pratos = [...pm.values()]
+        const cods = new Set(pratos.map((p) => p.codigo)); e.fichas = [...e.fichas.filter((f) => !cods.has(f.produto_codigo)), ...linhas]
+      }
+      saveEst()
+    },
+    async estSaveInsumo(codigo, patch) { const e = loadEst(); Object.assign(e.insumos.find((i) => i.codigo === codigo), patch); saveEst() },
+    async estSavePrato(codigo, patch) { const e = loadEst(); Object.assign(e.pratos.find((i) => i.codigo === codigo), patch); saveEst() },
+    async estAddMovs(rows) { const e = loadEst(); const out = rows.map((r) => ({ id: uid(), created_at: new Date().toISOString(), ...r })); e.movs.push(...out); saveEst(); return clone(out) },
+    async estDeleteMov(m) { const e = loadEst(); e.movs = e.movs.filter((x) => (m.lote ? x.lote !== m.lote : x.id !== m.id)); saveEst() },
+    async estNovaContagem(corte) { const e = loadEst(); const c = { id: uid(), corte, status: 'aberta', created_at: new Date().toISOString() }; e.contagens.push(c); saveEst(); return clone(c) },
+    async estContar(contagem_id, insumo_codigo, qtd) {
+      const e = loadEst(); e.itensCont = e.itensCont.filter((i) => !(i.contagem_id === contagem_id && i.insumo_codigo === insumo_codigo))
+      if (qtd != null) e.itensCont.push({ contagem_id, insumo_codigo, qtd, at: new Date().toISOString() }); saveEst()
+    },
+    async estFecharContagem(id, aberta = false) { const e = loadEst(); Object.assign(e.contagens.find((c) => c.id === id), aberta ? { status: 'aberta', fechada_em: null } : { status: 'fechada', fechada_em: new Date().toISOString() }); saveEst() },
+    async estExcluirContagem(id) { const e = loadEst(); e.contagens = e.contagens.filter((c) => c.id !== id); e.itensCont = e.itensCont.filter((i) => i.contagem_id !== id); saveEst() },
+    async estSaveFichaProducao(processado, linhas) { const e = loadEst(); e.fichasProd = [...e.fichasProd.filter((f) => f.processado_codigo !== processado), ...linhas.map((l) => ({ processado_codigo: processado, ...l }))]; saveEst() },
+    async estSaveTransfMap(product_name, insumo_codigo, fator) { const e = loadEst(); e.transfMap = e.transfMap.filter((m) => m.product_name !== product_name); if (insumo_codigo) e.transfMap.push({ product_name, insumo_codigo, fator }); saveEst() },
     async saveProfile(p) { await load(); Object.assign(db.profiles.find((x) => x.id === p.id), { role: p.role, unit_id: p.unit_id || null, name: p.name }); save() },
   }
 }
