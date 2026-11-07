@@ -8,7 +8,7 @@ import {
   mesesDre, dre, parseFixos, detectImport, addDaysISO, mesNome, okUnidade,
   CATS_PRODUTO, SEM_CAT, categoriaDe, parse3lmItens, rankingProdutos, agrupa,
 } from '../lib/fin.js'
-import { Modal, useToast, useConfirm } from '../components/ui.jsx'
+import { Modal, SortTh, useToast, useConfirm } from '../components/ui.jsx'
 
 const axisProps = { stroke: 'var(--axis)', tick: { fill: 'var(--text-3)', fontSize: 11.5 }, tickLine: false }
 const FORMA_COR = { Crédito: 'var(--series-1)', Débito: 'var(--series-2)', Pix: 'var(--series-3)', Dinheiro: 'var(--st-warn)', Outros: 'var(--text-3)' }
@@ -410,6 +410,7 @@ function Produtos({ ctx }) {
   const [categoria, setCategoria] = useState('')
   const [ordem, setOrdem] = useState('valor')
   const [busca, setBusca] = useState('')
+  const [sort, setSort] = useState({ key: 'rank', dir: 'asc' })
   const [editCats, setEditCats] = useState(false)
   const [de, ate] = range || (ultimo ? rangeDe(preset, ultimo) : ['', ''])
   const R = useMemo(() => (ultimo ? rankingProdutos(itens, produtos, { de, ate, unidade, categoria }) : null), [itens, produtos, de, ate, unidade, categoria, ultimo])
@@ -444,7 +445,15 @@ function Produtos({ ctx }) {
   const cats = [...new Set([...CATS_PRODUTO, ...itens.map(catDe)])].filter((c) => itens.some((r) => catDe(r) === c))
   const semCat = new Set(itens.filter((r) => catDe(r) === SEM_CAT).map((r) => agrupa(r.codigo, r.nome).codigo)).size
   const q = busca.trim().toLowerCase()
-  const tabela = ordenados.filter((r) => !q || r.nome.toLowerCase().includes(q) || r.codigo.includes(q))
+  const rank = new Map(ordenados.map((r, i) => [r.codigo, i + 1]))
+  const val = (r) => (sort.key === 'rank' ? rank.get(r.codigo) : sort.key === 'nome' ? nomeProd(r.nome) : r[sort.key])
+  const tabela = ordenados.filter((r) => !q || r.nome.toLowerCase().includes(q) || r.codigo.includes(q)).sort((a, b) => {
+    const x = val(a); const y = val(b)
+    if (x == null || x === '—') return 1
+    if (y == null || y === '—') return -1
+    const c = typeof x === 'string' ? x.localeCompare(y, 'pt-BR') : x - y
+    return (sort.dir === 'asc' ? c : -c) || rank.get(a.codigo) - rank.get(b.codigo)
+  })
   const lider = ordenados[0]
   const setP = (p) => { setPreset(p); setRange(null) }
   const setD = (i, v) => { if (!v) return; const n = [de, ate]; n[i] = v; if (n[0] > n[1]) n[1 - i] = v; setRange(n); setPreset('') }
@@ -536,11 +545,20 @@ function Produtos({ ctx }) {
         </div>
         <div className="table-wrap" style={{ maxHeight: '62vh' }}>
           <table className="data">
-            <thead><tr><th className="num">#</th><th>Produto</th><th className="hide-sm">Tipo</th><th className="num">Qtd</th><th className="num">Faturamento</th><th className="num hide-sm">% do total</th><th>Classe</th><th className="num hide-sm">Variação</th></tr></thead>
+            <thead><tr>
+              <SortTh k="rank" sort={sort} setSort={setSort} className="num">#</SortTh>
+              <SortTh k="nome" sort={sort} setSort={setSort}>Produto</SortTh>
+              <SortTh k="categoria" sort={sort} setSort={setSort} className="hide-sm">Tipo</SortTh>
+              <SortTh k="qtd" sort={sort} setSort={setSort} className="num">Qtd</SortTh>
+              <SortTh k="valor" sort={sort} setSort={setSort} className="num">Faturamento</SortTh>
+              <SortTh k="share" sort={sort} setSort={setSort} className="num hide-sm">% do total</SortTh>
+              <SortTh k="classe" sort={sort} setSort={setSort}>Classe</SortTh>
+              <SortTh k="varQtd" sort={sort} setSort={setSort} className="num hide-sm">Variação</SortTh>
+            </tr></thead>
             <tbody>
               {tabela.map((r) => (
                 <tr key={r.codigo}>
-                  <td className="num muted">{ordenados.indexOf(r) + 1}</td>
+                  <td className="num muted">{rank.get(r.codigo)}</td>
                   <td><strong>{nomeProd(r.nome)}</strong> <small className="muted">{r.codigo}</small></td>
                   <td className="hide-sm muted">{r.categoria}</td>
                   <td className="num">{qtdFmt(r.qtd)}</td>
