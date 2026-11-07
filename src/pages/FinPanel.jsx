@@ -6,7 +6,7 @@ import { money, moneyShort, dateBR, today, toISO } from '../lib/format.js'
 import {
   UNIDADES, CATEGORIAS, GRUPOS, INICIO, buildContas, resumoContas, vendasPorDia, calcMeta, comparativo, mixPagamentos,
   mesesDre, dre, parseFixos, detectImport, addDaysISO, mesNome, okUnidade,
-  CATS_PRODUTO, SEM_CAT, categoriaDe, parse3lmItens, rankingProdutos,
+  CATS_PRODUTO, SEM_CAT, categoriaDe, parse3lmItens, rankingProdutos, agrupa,
 } from '../lib/fin.js'
 import { Modal, useToast, useConfirm } from '../components/ui.jsx'
 
@@ -440,8 +440,9 @@ function Produtos({ ctx }) {
   const maxTop = Math.max(0.0001, ...top.map(metric))
   const maxMenos = Math.max(0.0001, ...menos.map(metric))
   const maxCat = Math.max(0.0001, ...R.porCategoria.map((c) => c.share))
-  const cats = [...new Set([...CATS_PRODUTO, ...itens.map((r) => categoriaDe(r.codigo, produtos))])].filter((c) => itens.some((r) => categoriaDe(r.codigo, produtos) === c))
-  const semCat = new Set(itens.filter((r) => categoriaDe(r.codigo, produtos) === SEM_CAT).map((r) => r.codigo)).size
+  const catDe = (r) => categoriaDe(agrupa(r.codigo, r.nome).codigo, produtos)
+  const cats = [...new Set([...CATS_PRODUTO, ...itens.map(catDe)])].filter((c) => itens.some((r) => catDe(r) === c))
+  const semCat = new Set(itens.filter((r) => catDe(r) === SEM_CAT).map((r) => agrupa(r.codigo, r.nome).codigo)).size
   const q = busca.trim().toLowerCase()
   const tabela = ordenados.filter((r) => !q || r.nome.toLowerCase().includes(q) || r.codigo.includes(q))
   const lider = ordenados[0]
@@ -556,7 +557,7 @@ function Produtos({ ctx }) {
       </div>
       <details className="fin-foot">
         <summary>De onde vêm esses números</summary>
-        <p>Do relatório Itens vendidos → Dia a Dia do 3LM (por data de caixa, com faturamento). A quantidade é a coluna "Qtde"; no Número 1 Promo ela conta cada lanche, por isso passa da quantidade de lançamentos. Itens sem preço (molhos cortesia) entram na quantidade mas não no faturamento. Reimportar um dia substitui o que havia nele.</p>
+        <p>Do relatório Itens vendidos → Dia a Dia do 3LM (por data de caixa, com faturamento). Os refis (Coca, Coca Zero, Fanta…) somam numa linha só, "Refil - Geral". A quantidade é a coluna "Qtde"; no Número 1 Promo ela conta cada lanche, por isso passa da quantidade de lançamentos. Itens sem preço (molhos cortesia) entram na quantidade mas não no faturamento. Reimportar um dia substitui o que havia nele.</p>
       </details>
       {editCats && <CategoriasForm store={ctx.store} itens={itens} produtos={produtos} onClose={() => setEditCats(false)} />}
     </>
@@ -566,7 +567,7 @@ function Produtos({ ctx }) {
 function CategoriasForm({ store, itens, produtos, onClose }) {
   const toast = useToast()
   const lista = useMemo(() => {
-    const m = new Map(); for (const r of itens) m.set(r.codigo, r.nome)
+    const m = new Map(); for (const r of itens) { const g = agrupa(r.codigo, r.nome); m.set(g.codigo, g.nome) }
     return [...m].map(([codigo, nome]) => ({ codigo, nome: produtos[codigo]?.nome || nome, categoria: categoriaDe(codigo, produtos) }))
       .sort((a, b) => (a.categoria === SEM_CAT ? -1 : 0) - (b.categoria === SEM_CAT ? -1 : 0) || a.categoria.localeCompare(b.categoria) || a.nome.localeCompare(b.nome))
   }, [itens, produtos])
