@@ -225,11 +225,10 @@ function UsersAdmin({ store }) {
   async function update(p, patch) {
     const next = { ...p, ...patch }
     if (next.role !== 'hub') next.unit_id = null
-    const fin = (next.access || []).includes('financeiro')
-    if ('role' in patch) next.access = next.role === 'nutri' ? ['nutricao'] : next.role === 'admin' ? ['transferencias'] : []
-    if ('financeiro' in patch) next.access = (next.access || []).filter((a) => a !== 'financeiro')
-    if ('financeiro' in patch ? patch.financeiro : fin) next.access = [...(next.access || []).filter((a) => a !== 'financeiro'), 'financeiro']
-    delete next.financeiro
+    const extras = ['financeiro', 'estoque'].filter((k) => (k in patch ? patch[k] : (p.access || []).includes(k)))
+    if ('role' in patch) next.access = next.role === 'nutri' ? ['nutricao'] : next.role === 'admin' ? ['transferencias'] : next.role === 'estoque' ? ['estoque'] : []
+    next.access = [...new Set([...(next.access || []).filter((a) => a !== 'financeiro' && a !== 'estoque'), ...extras])]
+    delete next.financeiro; delete next.estoque
     try { await api.saveProfile(next); setList((l) => l.map((x) => (x.id === p.id ? next : x))); toast('Acesso atualizado.') } catch (e) { toast(e.message, 'error') }
   }
 
@@ -244,7 +243,7 @@ function UsersAdmin({ store }) {
       </div>
       <div className="table-wrap">
         <table className="data">
-          <thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th>Unidade</th>{store.isMaster && <th>Master</th>}{store.isMaster && <th>Financeiro</th>}<th /></tr></thead>
+          <thead><tr><th>Nome</th><th>Usuário</th><th>Perfil</th><th>Unidade</th>{store.isMaster && <th>Master</th>}{store.isMaster && <th>Financeiro</th>}{store.isMaster && <th>Estoque</th>}<th /></tr></thead>
           <tbody>
             {list.map((p) => (
               <tr key={p.id}>
@@ -255,6 +254,7 @@ function UsersAdmin({ store }) {
                     <option value="pending">Sem acesso</option>
                     <option value="hub">Equipe de delivery</option>
                     {(store.isMaster || p.role === 'nutri') && <option value="nutri">Nutricionista</option>}
+                    {(store.isMaster || p.role === 'estoque') && <option value="estoque">Estoque</option>}
                     <option value="admin">Administrativo</option>
                   </select>
                 </td>
@@ -267,6 +267,7 @@ function UsersAdmin({ store }) {
                 </td>
                 {store.isMaster && <td><label className="pop-item" style={{ padding: 0 }} title="Master vê todos os painéis"><input type="checkbox" className="check" checked={!!p.master} disabled={p.id === me.id} onChange={(e) => update(p, { master: e.target.checked, role: e.target.checked ? 'admin' : p.role })} />Todos os painéis</label></td>}
                 {store.isMaster && <td><label className="pop-item" style={{ padding: 0 }} title="O Financeiro só aparece para quem estiver marcado aqui (nem o master vê sem isso)"><input type="checkbox" className="check" checked={(p.access || []).includes('financeiro')} disabled={p.id === me.id} onChange={(e) => update(p, { financeiro: e.target.checked })} />Liberado</label></td>}
+                {store.isMaster && <td><label className="pop-item" style={{ padding: 0 }} title="Libera o painel de Estoque (masters já têm)"><input type="checkbox" className="check" checked={!!p.master || (p.access || []).includes('estoque') || p.role === 'estoque'} disabled={!!p.master || p.role === 'estoque'} onChange={(e) => update(p, { estoque: e.target.checked })} />Liberado</label></td>}
                 <td>{!locked(p) || p.id === me.id ? <button className="btn sm" onClick={() => setPwFor(p)}>Redefinir senha</button> : null}</td>
               </tr>
             ))}
