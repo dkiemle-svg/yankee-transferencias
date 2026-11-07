@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeftRight, LayoutDashboard, Package, LogOut, Moon, Sun, KeyRound, ClipboardList, ListChecks, Users, Trophy, Home as HomeIcon, Salad, FileChartColumn, Landmark, Gauge, ReceiptText, TrendingUp, Table2, Repeat, ChartBarBig } from 'lucide-react'
+import { ArrowLeftRight, LayoutDashboard, Package, LogOut, Moon, Sun, KeyRound, ClipboardList, ListChecks, Users, Trophy, Home as HomeIcon, Salad, FileChartColumn, Landmark, Gauge, ReceiptText, TrendingUp, Table2, Repeat, ChartBarBig, Boxes, ClipboardCheck, NotebookPen, Settings2 } from 'lucide-react'
 import { api, DEMO } from './lib/api.js'
 import { ToastProvider, ConfirmProvider, Modal, useToast } from './components/ui.jsx'
 import Login from './pages/Login.jsx'
@@ -9,6 +9,7 @@ import Catalog from './pages/Catalog.jsx'
 import Home from './pages/Home.jsx'
 import NutriPanel from './pages/NutriPanel.jsx'
 import FinPanel from './pages/FinPanel.jsx'
+import EstoquePanel from './pages/EstoquePanel.jsx'
 
 // Painéis do sistema. Cada um tem um responsável e suas próprias abas.
 export const PANELS = [
@@ -45,6 +46,16 @@ export const PANELS = [
       { id: 'fin-fixos', label: 'Custos fixos', icon: Repeat },
     ],
   },
+  {
+    key: 'estoque', name: 'Estoque', icon: Boxes, owner: 'Loja ZN Salão',
+    desc: 'Estoque atual pela contagem, fichas técnicas e notas; contagens com desvio, produção e sugestão de compra.',
+    tabs: [
+      { id: 'est-lista', label: 'Estoque', icon: Boxes },
+      { id: 'est-contagens', label: 'Contagens', icon: ClipboardCheck },
+      { id: 'est-movs', label: 'Lançamentos', icon: NotebookPen },
+      { id: 'est-cadastros', label: 'Cadastros', icon: Settings2 },
+    ],
+  },
 ]
 const panelOfTab = (tab) => PANELS.find((p) => p.tabs.some((t) => t.id === tab))
 
@@ -57,6 +68,7 @@ export function panelsFor(profile) {
   const base = access.filter((k) => !PANELS.find((p) => p.key === k)?.restricted)
   if (base.length) return [...base, ...extra]
   if (profile.role === 'nutri') return ['nutricao', ...extra]
+  if (profile.role === 'estoque') return ['estoque', ...extra]
   if (profile.role === 'admin' || profile.role === 'hub') return ['transferencias', ...extra]
   return extra
 }
@@ -142,7 +154,7 @@ function Shell() {
   const initials = (profile?.name || profile?.email || '?').replace(/[^\p{L}\s]/gu, ' ').trim().split(/\s+/).map((s) => s[0]).slice(0, 2).join('').toUpperCase()
   const panel = panelOfTab(route)
   const canSee = panel && allowed.includes(panel.key)
-  const roleLabel = profile?.master ? 'Acesso master' : profile?.role === 'nutri' ? 'Nutricionista' : profile?.role === 'admin' ? 'Administrativo' : myUnit?.name || 'Aguardando liberação'
+  const roleLabel = profile?.master ? 'Acesso master' : profile?.role === 'nutri' ? 'Nutricionista' : profile?.role === 'admin' ? 'Administrativo' : profile?.role === 'estoque' ? 'Estoque' : myUnit?.name || 'Aguardando liberação'
 
   return (
     <>
@@ -186,6 +198,7 @@ function Shell() {
             {canSee && route === 'cadastros' && <Catalog store={store} />}
             {canSee && panel.key === 'nutricao' && <NutriPanel store={store} tab={route} go={setRoute} />}
             {canSee && panel.key === 'financeiro' && <FinPanel store={store} tab={route} go={setRoute} />}
+            {canSee && panel.key === 'estoque' && <EstoquePanel store={store} tab={route} />}
           </>
         )}
       </main>

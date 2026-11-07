@@ -619,3 +619,45 @@ table.data th.num { text-align: right; }
   .prod-row { grid-template-columns: minmax(0, 1.4fr) minmax(0, .8fr) 84px; }
   .prod-cat { grid-template-columns: 86px 1fr 46px; }
 }
+/* ---------- Estoque ---------- */
+.search-box { position: relative; display: inline-flex; align-items: center; }
+.search-box svg { position: absolute; left: 10px; color: var(--text-3); pointer-events: none; }
+.search-box .input { padding-left: 32px; width: 220px; }
+.link { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-decoration: underline; }
+.row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.spacer { flex: 1; }
+table.data.compact td, table.data.compact th { padding: 6px 10px; font-size: 12.5px; }
+table.data.est-table tr.est-row { cursor: pointer; }
+table.data.est-table td { font-variant-numeric: tabular-nums; }
+.est-precos { white-space: nowrap; font-size: 12.5px; }
+tr.est-detail > td { background: var(--surface-2); padding: 0 !important; }
+.est-hist { padding: 12px 16px 16px 40px; }
+.est-hist-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; }
+.est-hist table { background: var(--surface); border-radius: 8px; }
+.est-mini { width: 80px; text-align: right; }
+tr.est-fora td { background: color-mix(in srgb, var(--danger) 6%, var(--surface)); }
+.est-seg-list { overflow-x: auto; max-width: 100%; }
+.est-count { padding: 0 16px 16px; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); column-gap: 24px; }
+.est-count-cat { grid-column: 1 / -1; font-weight: 650; font-size: 13px; color: var(--text-2); padding: 14px 0 6px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
+.est-count-row { display: grid; grid-template-columns: minmax(0, 1fr) 96px 48px; align-items: center; gap: 8px; padding: 5px 0; font-size: 13.5px; border-bottom: 1px dashed var(--border); }
+.est-count-row .input { text-align: right; height: 34px; }
+.est-count-row small { color: var(--text-3); font-size: 11.5px; line-height: 1.2; }
+.est-count-row.done span { color: var(--text-2); }
+.est-count-row.done .input { border-color: var(--good); }
+.est-prod { display: grid; grid-template-columns: 260px 1fr; gap: 0; border-top: 1px solid var(--border); }
+.est-prod-list { display: flex; flex-direction: column; max-height: 60vh; overflow: auto; border-right: 1px solid var(--border); }
+.est-prod-list button { display: flex; justify-content: space-between; gap: 8px; text-align: left; border: 0; border-bottom: 1px solid var(--border); background: none; padding: 10px 14px; cursor: pointer; color: var(--text); font: inherit; font-size: 13.5px; }
+.est-prod-list button small { color: var(--text-3); font-size: 11.5px; white-space: nowrap; }
+.est-prod-list button.on { background: var(--accent-soft); }
+.est-prod-edit { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.est-prod-edit h4 { margin: 0 0 4px; }
+.est-prod-row { display: flex; gap: 8px; align-items: center; }
+.est-prod-row .select { flex: 1; min-width: 0; }
+@media (max-width: 760px) {
+  .est-prod { grid-template-columns: 1fr; }
+  .est-prod-list { max-height: 200px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .est-hist { padding: 10px; }
+  .search-box .input { width: 100%; }
+  .row-2 { grid-template-columns: 1fr; }
+}
+.pi-estoque { background: color-mix(in srgb, var(--st-warn) 16%, transparent); color: var(--st-warn); }
