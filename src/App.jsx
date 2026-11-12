@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeftRight, LayoutDashboard, Package, LogOut, Moon, Sun, KeyRound, ClipboardList, ListChecks, Users, Trophy, Home as HomeIcon, Salad, FileChartColumn, Landmark, Gauge, ReceiptText, TrendingUp, Table2, Repeat, ChartBarBig, Boxes, ClipboardCheck, NotebookPen, Settings2 } from 'lucide-react'
+import { ArrowLeftRight, LayoutDashboard, Package, LogOut, Moon, Sun, KeyRound, ClipboardList, ListChecks, Users, Trophy, Home as HomeIcon, Salad, FileChartColumn, Landmark, Gauge, ReceiptText, TrendingUp, Table2, Repeat, ChartBarBig, Boxes, ClipboardCheck, NotebookPen, Settings2, PartyPopper, Lightbulb, Percent } from 'lucide-react'
 import { api, DEMO } from './lib/api.js'
 import { ToastProvider, ConfirmProvider, Modal, useToast } from './components/ui.jsx'
 import Login from './pages/Login.jsx'
@@ -43,6 +43,8 @@ export const PANELS = [
       { id: 'fin-vendas', label: 'Vendas e meta', icon: TrendingUp },
       { id: 'fin-produtos', label: 'Produtos', icon: ChartBarBig },
       { id: 'fin-dre', label: 'DRE', icon: Table2 },
+      { id: 'fin-eventos', label: 'Eventos', icon: PartyPopper },
+      { id: 'fin-insights', label: 'Insights', icon: Lightbulb },
       { id: 'fin-fixos', label: 'Custos fixos', icon: Repeat },
     ],
   },
@@ -53,6 +55,7 @@ export const PANELS = [
       { id: 'est-lista', label: 'Estoque', icon: Boxes },
       { id: 'est-contagens', label: 'Contagens', icon: ClipboardCheck },
       { id: 'est-movs', label: 'Lançamentos', icon: NotebookPen },
+      { id: 'est-cmv', label: 'CMV', icon: Percent },
       { id: 'est-cadastros', label: 'Cadastros', icon: Settings2 },
     ],
   },

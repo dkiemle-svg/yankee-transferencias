@@ -662,3 +662,24 @@ tr.est-fora td { background: color-mix(in srgb, var(--danger) 6%, var(--surface)
 }
 .pi-estoque { background: color-mix(in srgb, var(--st-warn) 16%, transparent); color: var(--st-warn); }
 .dre-total { font-size: 11.5px; margin-left: 4px; white-space: nowrap; }
+/* Exportar, eventos, CMV e insights */
+.export-menu { position: relative; }
+.export-pop { position: absolute; right: 0; top: calc(100% + 6px); z-index: 40; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px; box-shadow: var(--shadow-lg); min-width: 230px; }
+.export-pop .row { display: flex; gap: 6px; }
+.export-pop .row .btn { flex: 1; justify-content: center; }
+.check-row { display: flex; gap: 8px; align-items: center; font-size: 13px; cursor: pointer; }
+.dre-sub { padding-left: 14px; color: var(--text-2); font-size: 12.5px; }
+.ev-itens td { padding-top: 4px; padding-bottom: 4px; }
+.ev-itens .input, .ev-itens .select { height: 32px; }
+.ev-total { display: flex; justify-content: space-between; align-items: baseline; padding: 10px 2px 0; font-size: 14px; }
+.ev-total b { font-size: 18px; }
+.cmv-toggles { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+.ins-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+.ins-quad { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 0 16px 16px; }
+.ins-quad > div { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.ins-quad b { font-size: 18px; display: block; }
+.ins-quad small { color: var(--text-3); line-height: 1.35; display: block; }
+.ins-nota { border-top: 1px solid var(--border); padding: 12px 16px; }
+.ins-nota h4 { margin: 0 0 4px; font-size: 14px; }
+.ins-nota p { margin: 0; white-space: pre-wrap; line-height: 1.5; color: var(--text-2); font-size: 13.5px; }
+@media (max-width: 760px) { .ins-grid { grid-template-columns: 1fr; } .ins-quad { grid-template-columns: repeat(2, minmax(0, 1fr)); } .export-pop { right: auto; left: 0; } }
