@@ -171,34 +171,62 @@ export function mesesDre(fin, contas, hoje = today()) {
   return [...new Set([...fin.vendas.map((r) => r.dia.slice(0, 7)), ...contas.map((r) => r.competencia.slice(0, 7)).filter((m) => m <= prox)])].sort()
 }
 
-export function dre(contas, vendas, mes, unidade) {
-  const lanc = contas.filter((r) => okUnidade(unidade)(r) && r.competencia.startsWith(mes))
+// ---------------------------------------------------------------------
+// Eventos (vendas fora da 3LM)
+// ---------------------------------------------------------------------
+export const totalEvento = (e) => (e.itens || []).reduce((t, i) => t + Number(i.qtd) * Number(i.preco), 0)
+export const receitaEventos = (eventos, mes) => sum((eventos || []).filter((e) => e.status === 'realizado' && e.dia.startsWith(mes)), totalEvento)
+
+/**
+ * DRE gerencial.
+ * - completa: loja + eventos realizados, todas as linhas (royalties, legado e BV abaixo do EBITDA).
+ * - operacional: só a loja (ZN Salão), sem eventos, sem royalties/legado/BV, e com o CMV
+ *   descontado do que foi enviado para os hubs (transferências do mês).
+ */
+export function dre(contas, vendas, mes, unidade, { eventos = [], modo = 'completa', transferido = 0 } = {}) {
+  const op = modo === 'operacional'
+  const un = op ? 'ZN Salão' : unidade
+  const lanc = contas.filter((r) => okUnidade(un)(r) && r.competencia.startsWith(mes))
   const g = {}
   for (const k of GRUPOS) {
     const rs = lanc.filter((r) => r.grupo === k)
     g[k] = { pago: sum(rs.filter((r) => r.status === 'Pago')), aberto: sum(rs.filter((r) => r.status !== 'Pago')) }
     g[k].total = g[k].pago + g[k].aberto
   }
-  const receita = sum(vendas.filter((r) => okUnidade(unidade)(r) && r.dia.startsWith(mes)))
+  const loja = sum(vendas.filter((r) => okUnidade(un)(r) && r.dia.startsWith(mes)))
+  const ev = op || !['Todas', 'ZN Salão'].includes(unidade) ? 0 : receitaEventos(eventos, mes)
+  const receita = loja + ev
+  const hub = op ? Number(transferido) || 0 : 0
   const tot = (f) => ({ pago: f('pago'), total: f('total') })
   const rl = tot((k) => receita - g['Deduções'][k])
-  const mb = tot((k) => rl[k] - g.CMV[k])
+  const mb = tot((k) => rl[k] - g.CMV[k] + hub)
   const eb = tot((k) => mb[k] - OPEX.reduce((t, o) => t + g[o][k], 0))
   const res = tot((k) => eb[k] + g['Royalties recebidos'][k] - g['Passivo unidades encerradas'][k] - g['Investimento BV Salão'][k])
   const linhas = [
     { nome: 'Receita bruta', tipo: 'tot', pago: receita, total: receita },
+    ...(ev ? [{ nome: 'Vendas da loja', tipo: 'g sub', sinal: 1, pago: loja, total: loja }, { nome: 'Eventos', tipo: 'g sub', sinal: 1, pago: ev, total: ev }] : []),
     { nome: 'Deduções', tipo: 'g', sinal: -1, ...g['Deduções'] },
     { nome: 'Receita líquida', tipo: 'tot', ...rl },
     { nome: 'CMV', tipo: 'g', sinal: -1, ...g.CMV },
+    ...(op ? [{ nome: 'Insumos enviados aos hubs', tipo: 'g sub', sinal: 1, pago: hub, total: hub, aberto: 0 }] : []),
     { nome: 'Margem bruta', tipo: 'tot', ...mb },
     ...OPEX.map((k) => ({ nome: k, tipo: 'g', sinal: -1, ...g[k] })),
     { nome: 'EBITDA operacional', tipo: 'tot', destaque: true, ...eb },
-    { nome: 'Royalties recebidos', tipo: 'below', sinal: 1, ...g['Royalties recebidos'] },
-    { nome: 'Passivo unidades encerradas', tipo: 'below', sinal: -1, ...g['Passivo unidades encerradas'] },
-    { nome: 'Investimento BV Salão', tipo: 'below', sinal: -1, ...g['Investimento BV Salão'] },
-    { nome: 'Resultado após legado e BV', tipo: 'tot', destaque: true, ...res },
+    ...(op ? [] : [
+      { nome: 'Royalties recebidos', tipo: 'below', sinal: 1, ...g['Royalties recebidos'] },
+      { nome: 'Passivo unidades encerradas', tipo: 'below', sinal: -1, ...g['Passivo unidades encerradas'] },
+      { nome: 'Investimento BV Salão', tipo: 'below', sinal: -1, ...g['Investimento BV Salão'] },
+      { nome: 'Resultado após legado e BV', tipo: 'tot', destaque: true, ...res },
+    ]),
   ]
-  return { receita, base: rl.total || receita, linhas, cmvPct: receita ? g.CMV.total / receita : 0 }
+  const cmvLiq = { pago: g.CMV.pago - hub, total: g.CMV.total - hub }
+  return { receita, loja, eventos: ev, hub, base: rl.total || receita, linhas, cmvPct: receita ? cmvLiq.total / receita : 0, cmvPctAtual: receita ? cmvLiq.pago / receita : 0 }
+}
+
+/** Valor transferido da loja para os hubs no mês (preço da transferência). */
+export function transferidoHubs(transfers, units, mes) {
+  const hub = new Set((units || []).filter((u) => u.is_hub).map((u) => u.id))
+  return sum((transfers || []).filter((t) => t.date?.startsWith(mes) && !hub.has(t.origin_id) && hub.has(t.destination_id)), (t) => t.total ?? Number(t.quantity) * Number(t.unit_price))
 }
 
 // ---------------------------------------------------------------------

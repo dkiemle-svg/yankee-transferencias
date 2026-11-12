@@ -21,7 +21,7 @@ function normEst(d) {
   }
 }
 /** Saídas calculadas no navegador (modo demonstração), igual à função est_saidas do banco. */
-function saidasLocal({ itens, fichas, transfers, transfMap, units, de }) {
+function saidasLocal({ itens, fichas, transfers, transfMap, units, de, eventos = [] }) {
   const out = []
   const fx = new Map(); fichas.forEach((f) => { if (!fx.has(f.produto_codigo)) fx.set(f.produto_codigo, []); fx.get(f.produto_codigo).push(f) })
   for (const i of itens) {
@@ -32,6 +32,10 @@ function saidasLocal({ itens, fichas, transfers, transfMap, units, de }) {
   for (const t of transfers) {
     const m = mp.get(t.product_name); if (!m || t.date < de || ub.get(t.origin_id)?.is_hub) continue
     out.push({ dia: t.date, insumo_codigo: m.insumo_codigo, tipo: 'transferencia', qtd: Number(t.quantity) * m.fator, origem: `${t.product_name} → ${ub.get(t.destination_id)?.name || ''}`, origem_qtd: Number(t.quantity) })
+  }
+  for (const e of eventos) {
+    if (e.status !== 'realizado' || e.dia < de) continue
+    for (const it of e.itens || []) for (const f of fx.get(it.codigo) || []) out.push({ dia: e.dia, insumo_codigo: f.insumo_codigo, tipo: 'evento', qtd: it.qtd * f.qtd, origem: `${it.codigo} ${it.nome} · evento ${e.nome}`, origem_qtd: it.qtd })
   }
   return out
 }
@@ -180,13 +184,27 @@ function supabaseApi() {
         return out
       }
       const opt = (p) => p.catch(() => []) // tabelas de produtos podem ainda não existir
-      const [lancamentos, pagamentos, custos_fixos, vendas, historico, itens, produtos] = await Promise.all([
+      const [lancamentos, pagamentos, custos_fixos, vendas, historico, itens, produtos, eventos, evItens, insights, pratos] = await Promise.all([
         all('fin_lancamentos', 'vencimento'), all('fin_pagamentos', 'id'), all('fin_custos_fixos', 'created_at'),
         all('fin_vendas', 'dia'), all('fin_historico', 'mes'), opt(all('fin_itens', 'dia')), opt(all('fin_produtos', 'codigo')),
+        opt(all('fin_eventos', 'dia')), opt(all('fin_evento_itens', 'evento_id')), opt(all('fin_insights', 'dia')), opt(all('est_pratos', 'codigo')),
       ])
       const n = (rows, ...ks) => rows.map((r) => { const o = { ...r }; ks.forEach((k) => { if (o[k] != null) o[k] = Number(o[k]) }); return o })
-      return { lancamentos: n(lancamentos, 'valor'), pagamentos, custos_fixos: n(custos_fixos, 'valor', 'dia'), vendas: n(vendas, 'valor'), historico: n(historico, 'total', 'promo_valor'), itens: n(itens, 'qtd', 'qtd_lanc', 'valor'), produtos }
+      const ei = n(evItens, 'qtd', 'preco')
+      return { lancamentos: n(lancamentos, 'valor'), pagamentos, custos_fixos: n(custos_fixos, 'valor', 'dia'), vendas: n(vendas, 'valor'), historico: n(historico, 'total', 'promo_valor'), itens: n(itens, 'qtd', 'qtd_lanc', 'valor'), produtos,
+        eventos: eventos.map((e) => ({ ...e, itens: ei.filter((i) => i.evento_id === e.id) })), insights, pratos: n(pratos, 'preco_venda') }
     },
+    async finSaveEvento(ev, itens) {
+      const { id, itens: _i, ...rest } = ev
+      const row = { ...rest, updated_at: new Date().toISOString() }
+      const saved = id ? ok(await sb.from('fin_eventos').update(row).eq('id', id).select().single()) : ok(await sb.from('fin_eventos').insert(row).select().single())
+      ok(await sb.from('fin_evento_itens').delete().eq('evento_id', saved.id))
+      if (itens.length) ok(await sb.from('fin_evento_itens').insert(itens.map((i) => ({ evento_id: saved.id, codigo: i.codigo, nome: i.nome, qtd: i.qtd, preco: i.preco }))))
+      return { ...saved, itens: itens.map((i) => ({ ...i, evento_id: saved.id })) }
+    },
+    async finSetEventoStatus(id, status) { ok(await sb.from('fin_eventos').update({ status, updated_at: new Date().toISOString() }).eq('id', id)) },
+    async finDeleteEvento(id) { ok(await sb.from('fin_eventos').delete().eq('id', id)) },
+    async finDeleteInsight(id) { ok(await sb.from('fin_insights').delete().eq('id', id)) },
     async finSetPago(ids, data) {
       if (data) ok(await sb.from('fin_pagamentos').upsert(ids.map((id) => ({ id, data, at: new Date().toISOString() }))))
       else ok(await sb.from('fin_pagamentos').delete().in('id', ids))
@@ -297,7 +315,7 @@ function demoApi() {
     if (fin) return fin
     try { const raw = localStorage.getItem(KEY_FIN); if (raw) fin = JSON.parse(raw) } catch { /* */ }
     if (!fin) { fin = { lancamentos: [], pagamentos: [], custos_fixos: [], vendas: [], historico: [] }; saveFin() }
-    fin.itens ||= []; fin.produtos ||= []
+    fin.itens ||= []; fin.produtos ||= []; fin.eventos ||= []; fin.insights ||= []
     return fin
   }
   const KEY_EST = 'yankee-demo-est-v1'
@@ -454,7 +472,7 @@ function demoApi() {
     async nutriSaveSettings(settings) { const n = loadNutri(); n.settings = settings; saveNutri(); return clone(settings) },
 
     // ----- Painel Financeiro (demonstração: guardado no navegador) -----
-    async finLoad() { await load(); return delay(clone(loadFin())) },
+    async finLoad() { await load(); const f = clone(loadFin()); f.pratos = clone(loadEst().pratos); return delay(f) },
     async finSetPago(ids, data) {
       const f = loadFin(); f.pagamentos = f.pagamentos.filter((p) => !ids.includes(p.id))
       if (data) f.pagamentos.push(...ids.map((id) => ({ id, data, at: new Date().toISOString() })))
@@ -480,11 +498,19 @@ function demoApi() {
     async finSaveProdutos(rows) {
       const f = loadFin(); const m = new Map(f.produtos.map((p) => [p.codigo, p])); rows.forEach((r) => m.set(r.codigo, r)); f.produtos = [...m.values()]; saveFin()
     },
+    async finSaveEvento(ev, itens) {
+      const f = loadFin(); f.eventos = f.eventos || []
+      const x = { status: 'agendado', ...ev, id: ev.id || uid(), itens: itens.map((i) => ({ ...i })) }
+      f.eventos = [...f.eventos.filter((e) => e.id !== x.id), x]; saveFin(); return clone(x)
+    },
+    async finSetEventoStatus(id, status) { const f = loadFin(); Object.assign(f.eventos.find((e) => e.id === id), { status }); saveFin() },
+    async finDeleteEvento(id) { const f = loadFin(); f.eventos = (f.eventos || []).filter((e) => e.id !== id); saveFin() },
+    async finDeleteInsight(id) { const f = loadFin(); f.insights = (f.insights || []).filter((e) => e.id !== id); saveFin() },
 
     // ----- Estoque (demonstração) -----
     async estLoad(de = EST_INICIO) {
       await load(); const e = loadEst(); const f = loadFin()
-      const saidas = saidasLocal({ itens: f.itens, fichas: e.fichas, transfers: db.transfers, transfMap: e.transfMap, units: db.units, de })
+      const saidas = saidasLocal({ itens: f.itens, fichas: e.fichas, transfers: db.transfers, transfMap: e.transfMap, units: db.units, de, eventos: f.eventos })
       return delay(clone(normEst({ ...e, fichasProd: e.fichasProd, itensCont: e.itensCont, saidas, vendas: f.itens.filter((i) => i.dia >= de && i.unidade === 'ZN Salão') })))
     },
     async estProdutosTransf() {

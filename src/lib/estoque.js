@@ -8,6 +8,7 @@ export const TIPOS_MOV = {
   producao_out: { label: 'Usado na produção', sinal: -1 },
   venda: { label: 'Venda (ficha técnica)', sinal: -1 },
   transferencia: { label: 'Transferência para hub', sinal: -1 },
+  evento: { label: 'Evento', sinal: -1 },
   perda: { label: 'Perda', sinal: -1 },
   ajuste: { label: 'Ajuste', sinal: 1 },
 }
