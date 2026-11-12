@@ -38,7 +38,9 @@ export default function EstoquePanel({ store, tab }) {
     const comFicha = new Set(est.fichas.map((f) => f.produto_codigo))
     const semFicha = new Map()
     for (const v of est.vendas) if (!comFicha.has(v.codigo)) { const o = semFicha.get(v.codigo) || { codigo: v.codigo, nome: v.nome, qtd: 0 }; o.qtd += v.qtd; semFicha.set(v.codigo, o) }
-    return { ...res, movs, preco, pr, semFicha: [...semFicha.values()].sort((a, b) => b.qtd - a.qtd) }
+    const noCadastro = new Set(est.pratos.map((p) => p.codigo))
+    const sf = [...semFicha.values()].map((x) => ({ ...x, novo: !noCadastro.has(x.codigo) })).sort((a, b) => b.qtd - a.qtd)
+    return { ...res, movs, preco, pr, semFicha: sf, novos: sf.filter((x) => x.novo) }
   }, [est, hoje])
 
   if (!est || !calc) return <div className="center-screen"><div className="spinner" /></div>
@@ -103,6 +105,7 @@ function Lista({ ctx }) {
         <Kpi icon={AlertTriangle} label="Estoque negativo" value={neg} sub={neg ? 'nota que não entrou ou ficha errada' : 'nenhum'} tone={neg ? 'bad' : ''} />
         <Kpi icon={CookingPot} label="Vendidos sem ficha" value={calc.semFicha.length} sub={calc.semFicha.length ? calc.semFicha.slice(0, 3).map((s) => nomeBonito(s.nome)).join(', ') : 'todos com ficha'} tone={calc.semFicha.length ? 'warn' : ''} />
       </div>
+      {calc.novos.length > 0 && <div className="note warn" style={{ marginBottom: 12 }}><AlertTriangle size={16} /><span><strong>{calc.novos.length} {calc.novos.length > 1 ? 'itens vendidos não estão' : 'item vendido não está'} no cadastro</strong> ({calc.novos.slice(0, 4).map((s) => nomeBonito(s.nome)).join(', ')}{calc.novos.length > 4 ? '…' : ''}). Provavelmente são novos na 3LM: reimporte as Fichas Técnicas ou cadastre em <button className="link" onClick={() => store.go('est-cadastros')}>Cadastros → Cardápio</button>. Até lá, eles não baixam o estoque.</span></div>}
       {!calc.d0 && <div className="note warn" style={{ marginBottom: 12 }}><AlertTriangle size={16} /><span><strong>Sem contagem ainda.</strong> Tudo fica em zero e a sugestão de compra só aparece depois do D0. O consumo por dia já é calculado pelas vendas dos últimos 7 dias. Faça a primeira contagem em <button className="link" onClick={() => store.go('est-contagens')}>Contagens</button> para ter o D0.</span></div>}
       <div className="card">
         <div className="filters fin-filters">
@@ -556,14 +559,40 @@ function Insumos({ ctx }) {
   const save = async (i, patch) => { try { await api.estSaveInsumo(i.codigo, patch); await reload() } catch (e) { toast(e.message, 'error') } }
   const num = (v) => Number(String(v).replace(',', '.')) || 0
   const ativarCat = async (on) => { for (const i of rows.filter((r) => r.ativo !== on)) await api.estSaveInsumo(i.codigo, { ativo: on }); reload() }
+  const [novo, setNovo] = useState(null)
+  const criar = async () => {
+    const nome = (novo.nome || '').trim().toUpperCase(); const codigo = (novo.codigo || '').trim() || `M${Date.now().toString(36).toUpperCase()}`
+    if (!nome) { toast('Informe o nome do insumo.', 'error'); return }
+    if (est.insumos.some((i) => i.codigo === codigo)) { toast('Já existe um insumo com esse código.', 'error'); return }
+    try {
+      await api.estAddInsumo({ codigo, nome, unidade: novo.unidade || 'UND', categoria: novo.categoria || 'SECOS', ativo: true, preco_medio: num(novo.preco), preco_ultimo: num(novo.preco), litros: /^BIB\b/i.test(nome) ? (num(novo.litros) || null) : null })
+      await reload(); setNovo(null); toast('Insumo cadastrado.')
+    } catch (e) { toast(e.message, 'error') }
+  }
   return (
     <div className="card">
+      {novo && <Modal title="Novo insumo" onClose={() => setNovo(null)} footer={<><button className="btn" onClick={() => setNovo(null)}>Cancelar</button><button className="btn primary" onClick={criar}>Cadastrar</button></>}>
+        <div className="stack">
+          <label className="field"><span>Nome</span><input className="input" value={novo.nome || ''} onChange={(e) => setNovo({ ...novo, nome: e.target.value })} autoFocus /></label>
+          <div className="row-2">
+            <label className="field"><span>Unidade</span><select className="select" value={novo.unidade || 'UND'} onChange={(e) => setNovo({ ...novo, unidade: e.target.value })}>{['UND', 'KG', 'LT', 'PCT', 'CX'].map((u) => <option key={u}>{u}</option>)}</select></label>
+            <label className="field"><span>Categoria</span><select className="select" value={novo.categoria || 'SECOS'} onChange={(e) => setNovo({ ...novo, categoria: e.target.value })}>{cats.map((c) => <option key={c} value={c}>{catBonita(c)}</option>)}</select></label>
+          </div>
+          <div className="row-2">
+            <label className="field"><span>Código na 3LM (se já existir)</span><input className="input" value={novo.codigo || ''} onChange={(e) => setNovo({ ...novo, codigo: e.target.value })} placeholder="Deixe vazio se não tiver" /></label>
+            <label className="field"><span>Custo por unidade (R$)</span><input className="input" inputMode="decimal" value={novo.preco || ''} onChange={(e) => setNovo({ ...novo, preco: e.target.value })} placeholder="0,00" /></label>
+          </div>
+          {/^BIB\b/i.test(novo.nome || '') && <label className="field"><span>Litros do bag</span><input className="input" inputMode="decimal" value={novo.litros || ''} onChange={(e) => setNovo({ ...novo, litros: e.target.value })} /></label>}
+          <p className="hint" style={{ margin: 0 }}>Use o mesmo código da 3LM quando o insumo já estiver cadastrado lá: assim a próxima importação atualiza este item em vez de criar outro.</p>
+        </div>
+      </Modal>}
       <div className="card-head"><div><h3>Insumos</h3><p>Só os <b>ativos</b> aparecem na lista e na contagem. Tolerância é o desvio aceito na contagem antes de marcar o item em vermelho.</p></div></div>
       <div className="filters fin-filters">
         <label className="search-box"><Search size={15} /><input className="input" placeholder="Buscar" value={busca} onChange={(e) => setBusca(e.target.value)} /></label>
         <select className="select" style={{ width: 210 }} value={cat} onChange={(e) => setCat(e.target.value)}><option value="">Todas as categorias</option>{cats.map((x) => <option key={x} value={x}>{catBonita(x)}</option>)}</select>
         {cat && <><button className="btn sm" onClick={() => ativarCat(true)}>Ativar a categoria</button><button className="btn sm" onClick={() => ativarCat(false)}>Desativar a categoria</button></>}
         <span className="muted" style={{ fontSize: 13 }}>{est.insumos.filter((i) => i.ativo).length} ativos de {est.insumos.length}</span>
+        <span className="spacer" /><button className="btn sm primary" onClick={() => setNovo({ categoria: cat || 'SECOS' })}><Plus />Novo insumo</button>
       </div>
       <div className="table-wrap" style={{ maxHeight: '64vh' }}>
         <table className="data">
@@ -674,18 +703,21 @@ function Cardapio({ ctx }) {
     return { ...p, itens: f.length, custo, cmv: p.preco_venda > 0 ? custo / p.preco_venda : null, vendidos: vendidos.get(p.codigo) || 0 }
   }).sort((a, b) => b.vendidos - a.vendidos || a.nome.localeCompare(b.nome))
   const save = async (p, patch) => { try { await api.estSavePrato(p.codigo, patch); await reload() } catch (e) { toast(e.message, 'error') } }
+  const [edit, setEdit] = useState(null)
   return (
     <>
-      {calc.semFicha.length > 0 && <div className="note warn" style={{ marginBottom: 12 }}><AlertTriangle size={16} /><span><strong>Vendidos sem ficha técnica</strong> (não baixam nada do estoque): {calc.semFicha.map((s) => `${nomeBonito(s.nome)} (${qf(s.qtd)})`).join(', ')}. Cadastre a ficha na 3LM e importe de novo.</span></div>}
+      {calc.semFicha.length > 0 && <div className="note warn" style={{ marginBottom: 12 }}><AlertTriangle size={16} /><span><strong>Vendidos sem ficha técnica</strong> (não baixam nada do estoque). Clique para cadastrar: {calc.semFicha.map((s, k) => <React.Fragment key={s.codigo}>{k ? ', ' : ''}<button className="link" onClick={() => setEdit({ codigo: s.codigo, nome: s.nome, secao: '', preco_venda: 0, novo: s.novo })}>{nomeBonito(s.nome)} ({qf(s.qtd)})</button></React.Fragment>)}. Ou cadastre na 3LM e importe de novo.</span></div>}
+      {edit && <FichaEditor ctx={ctx} prato={edit} onClose={() => setEdit(null)} />}
       <div className="card">
-        <div className="card-head"><div><h3>Cardápio e fichas técnicas</h3><p>Fichas importadas da 3LM. O custo usa o preço médio dos insumos. Marque como <b>estratégico</b> o que fica no cardápio por posicionamento, mesmo com margem baixa (vai para os insights).</p></div></div>
+        <div className="card-head"><div><h3>Cardápio e fichas técnicas</h3><p>Fichas importadas da 3LM ou cadastradas aqui. Clique num item para editar a ficha. O custo usa o preço médio dos insumos. Marque como <b>estratégico</b> o que fica no cardápio por posicionamento, mesmo com margem baixa.</p></div>
+          <button className="btn sm primary" onClick={() => setEdit({ codigo: '', nome: '', secao: '', preco_venda: '', novo: true })}><Plus />Novo item</button></div>
         <div className="table-wrap" style={{ maxHeight: '64vh' }}>
           <table className="data">
             <thead><tr><th>Item</th><th className="hide-sm">Seção</th><th className="num hide-sm">Vendidos desde {dateBR(EST_INICIO).slice(0, 5)}</th><th className="num">Preço</th><th className="num">Custo</th><th className="num">CMV</th><th>Estratégico</th></tr></thead>
             <tbody>
               {rows.map((p) => (
-                <tr key={p.codigo}>
-                  <td><strong>{nomeBonito(p.nome)}</strong> <small className="muted">{p.codigo} · {p.itens} insumos</small></td>
+                <tr key={p.codigo} className="est-row" onClick={(e) => { if (!e.target.closest('input')) setEdit(p) }}>
+                  <td><strong>{nomeBonito(p.nome)}</strong> <small className="muted">{p.codigo} · {p.itens ? `${p.itens} insumos` : <span className="txt-danger">sem ficha</span>}</small></td>
                   <td className="hide-sm muted">{nomeBonito(p.secao)}</td>
                   <td className="num hide-sm">{qf(p.vendidos)}</td>
                   <td className="num">{money(p.preco_venda)}</td>
@@ -699,5 +731,57 @@ function Cardapio({ ctx }) {
         </div>
       </div>
     </>
+  )
+}
+
+function FichaEditor({ ctx, prato, onClose }) {
+  const { est, calc, reload, toast } = ctx
+  const [f, setF] = useState({ codigo: prato.codigo || '', nome: prato.nome || '', secao: prato.secao || '', preco: prato.preco_venda ? String(prato.preco_venda).replace('.', ',') : '' })
+  const [linhas, setLinhas] = useState(() => est.fichas.filter((x) => x.produto_codigo === prato.codigo).map((x) => ({ insumo_codigo: x.insumo_codigo, qtd: String(x.qtd).replace('.', ',') })))
+  const [busy, setBusy] = useState(false)
+  const existe = est.pratos.some((p) => p.codigo === prato.codigo)
+  const ins = est.insumos.filter((i) => i.ativo).sort((a, b) => a.nome.localeCompare(b.nome))
+  const n = (v) => Number(String(v).replace(',', '.')) || 0
+  const custo = linhas.reduce((t, l) => { const i = est.insumos.find((x) => x.codigo === l.insumo_codigo); return t + n(l.qtd) * (i ? calc.preco(i) : 0) }, 0)
+  const salvar = async () => {
+    const codigo = f.codigo.trim()
+    if (!codigo || !f.nome.trim()) { toast('Informe o código (o mesmo da venda na 3LM) e o nome.', 'error'); return }
+    if (!existe && est.pratos.some((p) => p.codigo === codigo)) { toast('Já existe um item com esse código.', 'error'); return }
+    setBusy(true)
+    try {
+      await api.estUpsertPrato({ codigo, nome: f.nome.trim().toUpperCase(), secao: f.secao.trim().toUpperCase() || null, preco_venda: n(f.preco) })
+      await api.estSaveFicha(codigo, linhas.filter((l) => l.insumo_codigo && n(l.qtd) > 0).map((l) => ({ insumo_codigo: l.insumo_codigo, qtd: n(l.qtd) })))
+      await reload(); toast('Ficha técnica salva.'); onClose()
+    } catch (e) { toast(e.message, 'error') } finally { setBusy(false) }
+  }
+  return (
+    <Modal title={existe ? `Ficha técnica · ${nomeBonito(prato.nome)}` : 'Novo item do cardápio'} onClose={onClose} wide
+      footer={<><button className="btn" onClick={onClose}>Cancelar</button><button className="btn primary" disabled={busy} onClick={salvar}>{busy ? 'Salvando…' : 'Salvar ficha'}</button></>}>
+      <div className="stack">
+        <div className="row-2">
+          <label className="field"><span>Código na 3LM (o mesmo das vendas)</span><input className="input" value={f.codigo} disabled={existe} onChange={(e) => setF({ ...f, codigo: e.target.value })} /></label>
+          <label className="field"><span>Nome</span><input className="input" value={f.nome} onChange={(e) => setF({ ...f, nome: e.target.value })} /></label>
+        </div>
+        <div className="row-2">
+          <label className="field"><span>Seção</span><input className="input" value={f.secao} onChange={(e) => setF({ ...f, secao: e.target.value })} placeholder="Burgers, Bebidas…" /></label>
+          <label className="field"><span>Preço de venda (R$)</span><input className="input" inputMode="decimal" value={f.preco} onChange={(e) => setF({ ...f, preco: e.target.value })} /></label>
+        </div>
+        <div><strong style={{ fontSize: 13 }}>1 unidade vendida consome:</strong></div>
+        {linhas.map((l, k) => (
+          <div key={k} className="est-prod-row">
+            <select className="select" value={l.insumo_codigo} onChange={(e) => setLinhas((x) => x.map((y, j) => (j === k ? { ...y, insumo_codigo: e.target.value } : y)))}>
+              <option value="">Insumo…</option>{ins.map((i) => <option key={i.codigo} value={i.codigo}>{nomeBonito(i.nome)} ({i.unidade})</option>)}
+            </select>
+            <input className="input" inputMode="decimal" style={{ width: 110 }} value={l.qtd} placeholder="0" onChange={(e) => setLinhas((x) => x.map((y, j) => (j === k ? { ...y, qtd: e.target.value } : y)))} />
+            <button className="btn ghost icon" aria-label="Remover" onClick={() => setLinhas((x) => x.filter((_, j) => j !== k))}><Trash2 /></button>
+          </div>
+        ))}
+        <div className="fin-actions">
+          <button className="btn sm" onClick={() => setLinhas((x) => [...x, { insumo_codigo: '', qtd: '' }])}><Plus />Insumo</button>
+          <span className="muted">Custo: <b>{money(custo)}</b>{n(f.preco) > 0 ? <> · CMV <b>{pct(custo / n(f.preco))}</b></> : null}</span>
+        </div>
+        <p className="hint" style={{ margin: 0 }}>Quantidade na unidade do insumo (ex.: 0,1 KG de carne = 100 g). Se a ficha for importada da 3LM depois, ela substitui esta.</p>
+      </div>
+    </Modal>
   )
 }
