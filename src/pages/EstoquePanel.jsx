@@ -9,6 +9,9 @@ import {
   TIPOS_MOV, MOTIVOS_MANUAL, MOTIVOS_PERDA, calcEstoque, precos, desvios, consumoPostMix, parseEstoqueAtual, parseFichas, addDias,
 } from '../lib/estoque.js'
 import { Modal, SortTh, useToast, useConfirm } from '../components/ui.jsx'
+import ExportMenu from '../components/ExportMenu.jsx'
+import { exportar } from '../lib/relatorio.js'
+import { cmvRelatorio, totalCmv, PROMO_PADRAO } from '../lib/cmv.js'
 
 const qf = (v, d = 3) => (v == null || Number.isNaN(v) ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: d }))
 const pct = (v) => (v == null ? '—' : `${(v * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%`)
@@ -69,6 +72,7 @@ export default function EstoquePanel({ store, tab }) {
           {tab === 'est-lista' && <Lista ctx={ctx} />}
           {tab === 'est-contagens' && <Contagens ctx={ctx} />}
           {tab === 'est-movs' && <Lancamentos ctx={ctx} />}
+          {tab === 'est-cmv' && <Cmv ctx={ctx} />}
           {tab === 'est-cadastros' && <Cadastros ctx={ctx} />}
         </>
       )}
@@ -783,5 +787,140 @@ function FichaEditor({ ctx, prato, onClose }) {
         <p className="hint" style={{ margin: 0 }}>Quantidade na unidade do insumo (ex.: 0,1 KG de carne = 100 g). Se a ficha for importada da 3LM depois, ela substitui esta.</p>
       </div>
     </Modal>
+  )
+}
+
+// =====================================================================
+// Relatório de CMV (teórico: ficha técnica × preço médio dos insumos)
+// =====================================================================
+const CMV_PRESETS = [['mes', 'Este mês'], ['d0', 'Desde a contagem'], ['7d', '7 dias'], ['mespassado', 'Mês passado']]
+const lerPromo = () => { try { const v = JSON.parse(localStorage.getItem('yb-cmv-promo') || 'null'); return Array.isArray(v) ? v : PROMO_PADRAO } catch { return PROMO_PADRAO } }
+
+function Cmv({ ctx }) {
+  const { est, calc, store, hoje, toast } = ctx
+  const fin = store.fin
+  const [preset, setPreset] = useState('mes')
+  const [range, setRange] = useState(null)
+  const [incluir, setIncluir] = useState({ eventos: false, hub: false, promo: false })
+  const [promo, setPromo] = useState(lerPromo)
+  const [promoTxt, setPromoTxt] = useState(() => lerPromo().join(', '))
+  const [sort, setSort] = useState({ key: 'custo', dir: 'desc' })
+  const ultimoVenda = est.vendas.reduce((mx, v) => (v.dia > mx ? v.dia : mx), '') || hoje
+  const presetRange = (k) => {
+    const [y, m] = ultimoVenda.split('-').map(Number)
+    if (k === 'd0' && calc.d0) return [addDias(calc.d0.corte, 1), ultimoVenda]
+    if (k === '7d') return [addDias(ultimoVenda, -6), ultimoVenda]
+    if (k === 'mespassado') { const a = new Date(y, m - 2, 1); const b = new Date(y, m - 1, 0); const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; return [iso(a), iso(b)] }
+    return [`${ultimoVenda.slice(0, 7)}-01`, ultimoVenda]
+  }
+  const [de, ate] = range || presetRange(preset)
+  const R = useMemo(() => cmvRelatorio({ est, fin, transfers: store.transfers, units: store.units, de, ate, promo }), [est, fin, store.transfers, store.units, de, ate, promo])
+  const completo = totalCmv(R.grupos, { eventos: true, hub: true, promo: true })
+  const filtrado = totalCmv(R.grupos, incluir)
+  const comR = !!fin
+  const savePromo = () => {
+    const v = promoTxt.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean)
+    setPromo(v); try { localStorage.setItem('yb-cmv-promo', JSON.stringify(v)) } catch { /* */ }
+  }
+  const val = (r) => (sort.key === 'nome' ? nomeBonito(r.nome) : r[sort.key])
+  const prods = [...R.produtos].sort((a, b) => { const x = val(a); const y = val(b); if (x == null) return 1; if (y == null) return -1; const c = typeof x === 'string' ? x.localeCompare(y, 'pt-BR') : x - y; return sort.dir === 'asc' ? c : -c })
+  const setD = (i, v) => { if (!v) return; const n = [de, ate]; n[i] = v; if (n[0] > n[1]) n[1 - i] = v; setRange(n); setPreset('') }
+  const incl = (g) => g.key === 'loja' || g.key === 'perdas' || incluir[g.key]
+  const fora = ['eventos', 'hub', 'promo'].filter((k) => !incluir[k]).map((k) => ({ eventos: 'eventos', hub: 'envios aos hubs', promo: 'N1 promo' }[k]))
+
+  const exp = (formato, versao) => {
+    const inc = versao === 'completo' ? { eventos: true, hub: true, promo: true } : incluir
+    const t = totalCmv(R.grupos, inc)
+    const gs = R.grupos.filter((g) => g.key === 'loja' || g.key === 'perdas' || inc[g.key])
+    const ps = R.produtos.filter((p) => inc.promo || !p.promo)
+    const fx = ['eventos', 'hub', 'promo'].filter((k) => !inc[k]).map((k) => ({ eventos: 'eventos', hub: 'envios aos hubs', promo: 'N1 promo' }[k]))
+    return exportar({
+      titulo: versao === 'completo' ? 'CMV completo' : 'CMV da loja', arquivo: `cmv_${versao}`,
+      subtitulo: `${dateBR(de)} a ${dateBR(ate)}${fx.length ? ` · sem ${fx.join(', ')}` : ' · tudo incluído'}`,
+      resumo: [['CMV', t.cmv != null ? pct(t.cmv) : '—'], ['Custo', money(t.custo)], ...(comR ? [['Faturamento', money(t.receita)]] : []), ['CMV completo', completo.cmv != null ? pct(completo.cmv) : '—']],
+      colunas: [{ h: 'Origem / produto', w: 34 }, { h: 'Qtd', tipo: 'num' }, ...(comR ? [{ h: 'Faturamento', tipo: 'money' }] : []), { h: 'Custo/un', tipo: 'money' }, { h: 'Custo', tipo: 'money' }, ...(comR ? [{ h: 'CMV', tipo: 'pct' }] : [])],
+      linhas: [
+        ...gs.map((g) => ({ forte: true, c: [g.nome, null, ...(comR ? [g.receita] : []), null, g.custo, ...(comR ? [g.cmv] : [])] })),
+        { forte: true, c: ['Total', null, ...(comR ? [t.receita] : []), null, t.custo, ...(comR ? [t.cmv] : [])] },
+        ...ps.map((p) => ({ sub: true, c: [`${nomeBonito(p.nome)}${p.promo ? ' (promo)' : ''}${p.semFicha ? ' (sem ficha)' : ''}`, p.qtd, ...(comR ? [p.receita] : []), p.custoUnit, p.custo, ...(comR ? [p.cmv] : [])] })),
+      ],
+      notas: ['CMV teórico: quantidade vendida × ficha técnica × preço médio dos insumos. Perdas lançadas entram sempre. Produtos sem ficha técnica ficam com custo zero.'],
+    }, formato).catch((e) => toast(e.message, 'error'))
+  }
+
+  return (
+    <>
+      <div className="card" style={{ marginBottom: 12 }}>
+        <div className="filters fin-filters">
+          <div className="seg" role="group" aria-label="Período">
+            {CMV_PRESETS.filter(([k]) => k !== 'd0' || calc.d0).map(([k, l]) => <button key={k} aria-pressed={preset === k} onClick={() => { setPreset(k); setRange(null) }}>{l}</button>)}
+          </div>
+          <label className="fin-date">De <input type="date" className="input" value={de} onChange={(e) => setD(0, e.target.value)} /></label>
+          <label className="fin-date">Até <input type="date" className="input" value={ate} onChange={(e) => setD(1, e.target.value)} /></label>
+          <div style={{ marginLeft: 'auto' }}><ExportMenu onExport={exp} opcoes={[['filtrado', 'Como está na tela'], ['completo', 'Completo (tudo incluído)']]} /></div>
+        </div>
+        <div className="fin-split cmv-toggles">
+          <span className="muted">Incluir no CMV:</span>
+          <label className="check-row"><input type="checkbox" className="check" checked={incluir.eventos} onChange={(e) => setIncluir({ ...incluir, eventos: e.target.checked })} /> Eventos</label>
+          <label className="check-row"><input type="checkbox" className="check" checked={incluir.hub} onChange={(e) => setIncluir({ ...incluir, hub: e.target.checked })} /> Envio aos hubs (produção)</label>
+          <label className="check-row"><input type="checkbox" className="check" checked={incluir.promo} onChange={(e) => setIncluir({ ...incluir, promo: e.target.checked })} /> N1 promo</label>
+          <label className="check-row muted">Códigos da promo <input className="input" style={{ width: 110, height: 30 }} value={promoTxt} onChange={(e) => setPromoTxt(e.target.value)} onBlur={savePromo} aria-label="Códigos dos produtos de promoção" /></label>
+        </div>
+      </div>
+      <div className="kpis">
+        <Kpi icon={Wallet} label={fora.length ? `CMV sem ${fora.join(', ')}` : 'CMV (tudo incluído)'} value={comR ? pct(filtrado.cmv) : money(filtrado.custo)} sub={comR ? `${money(filtrado.custo)} de custo sobre ${money(filtrado.receita)}` : 'custo teórico no período'} tone="good" />
+        <Kpi icon={AlertTriangle} label="CMV completo" value={comR ? pct(completo.cmv) : money(completo.custo)} sub={comR ? 'com eventos, hubs e N1 promo' : 'custo com eventos, hubs e promo'} />
+        <Kpi icon={PackageMinus} label="Perdas lançadas" value={money(R.grupos.find((g) => g.key === 'perdas').custo)} sub="entram sempre no CMV" />
+        <Kpi icon={CookingPot} label="Vendidos sem ficha" value={R.semFicha.length} sub={R.semFicha.length ? `custo zero: ${R.semFicha.slice(0, 2).map((p) => nomeBonito(p.nome)).join(', ')}` : 'todos com ficha'} tone={R.semFicha.length ? 'warn' : ''} />
+      </div>
+      <div className="card" style={{ marginBottom: 12 }}>
+        <div className="card-head"><div><h3>CMV por origem</h3><p>Custo teórico: quantidade × ficha técnica × preço médio dos insumos.{!comR && ' O faturamento só aparece para quem tem o Financeiro.'}</p></div></div>
+        <div className="table-wrap">
+          <table className="data">
+            <thead><tr><th>Origem</th>{comR && <th className="num">Faturamento</th>}<th className="num">Custo</th>{comR && <th className="num">CMV</th>}<th>No CMV</th></tr></thead>
+            <tbody>
+              {R.grupos.map((g) => (
+                <tr key={g.key} className={incl(g) ? '' : 'muted'}>
+                  <td><strong>{g.nome}</strong></td>
+                  {comR && <td className="num">{g.receita == null ? '—' : money(g.receita)}</td>}
+                  <td className="num">{money(g.custo)}</td>
+                  {comR && <td className="num">{g.cmv == null ? '—' : pct(g.cmv)}</td>}
+                  <td>{incl(g) ? <span className="pill good">incluído</span> : <span className="pill">fora</span>}</td>
+                </tr>
+              ))}
+              <tr className="tot"><td><strong>Total considerado</strong></td>{comR && <td className="num"><strong>{money(filtrado.receita)}</strong></td>}<td className="num"><strong>{money(filtrado.custo)}</strong></td>{comR && <td className="num"><strong>{pct(filtrado.cmv)}</strong></td>}<td /></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div className="card">
+        <div className="card-head"><div><h3>Por produto vendido na loja</h3><p>Ordene pelas colunas. Produtos sem ficha técnica ficam com custo zero até a ficha ser cadastrada.</p></div></div>
+        <div className="table-wrap" style={{ maxHeight: '60vh' }}>
+          <table className="data">
+            <thead><tr>
+              <SortTh k="nome" sort={sort} setSort={setSort}>Produto</SortTh>
+              <SortTh k="qtd" sort={sort} setSort={setSort} className="num">Qtd</SortTh>
+              {comR && <SortTh k="receita" sort={sort} setSort={setSort} className="num">Faturamento</SortTh>}
+              <SortTh k="custoUnit" sort={sort} setSort={setSort} className="num">Custo/un</SortTh>
+              <SortTh k="custo" sort={sort} setSort={setSort} className="num">Custo</SortTh>
+              {comR && <SortTh k="cmv" sort={sort} setSort={setSort} className="num">CMV</SortTh>}
+            </tr></thead>
+            <tbody>
+              {prods.map((p) => (
+                <tr key={p.codigo} className={p.promo && !incluir.promo ? 'muted' : ''}>
+                  <td><strong>{nomeBonito(p.nome)}</strong> <small className="muted">{p.codigo}</small>{p.promo && <span className="pill warn" style={{ marginLeft: 6 }}>promo</span>}{p.semFicha && <span className="pill" style={{ marginLeft: 6 }}>sem ficha</span>}</td>
+                  <td className="num">{qf(p.qtd, 1)}</td>
+                  {comR && <td className="num">{money(p.receita)}</td>}
+                  <td className="num">{p.custoUnit == null ? '—' : money(p.custoUnit)}</td>
+                  <td className="num"><strong>{money(p.custo)}</strong></td>
+                  {comR && <td className={`num ${p.cmv > 0.35 ? 'txt-danger' : ''}`}>{pct(p.cmv)}</td>}
+                </tr>
+              ))}
+              {!prods.length && <tr><td colSpan={6}><div className="empty"><Inbox /><div>Sem vendas no período.</div></div></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>
   )
 }

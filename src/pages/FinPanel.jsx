@@ -1,11 +1,14 @@
 import React, { useMemo, useRef, useState } from 'react'
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell, ReferenceLine, Legend } from 'recharts'
-import { AlertTriangle, CalendarDays, CheckCircle2, ChartBarBig, Clock, Pencil, Pause, Play, Plus, Target, Trash2, Undo2, Upload, Wallet, Inbox } from 'lucide-react'
+import { AlertTriangle, CalendarDays, CheckCircle2, ChartBarBig, Clock, Pencil, Pause, Play, Plus, Target, Trash2, Undo2, Upload, Wallet, Inbox, Download, FileSpreadsheet, FileText, PartyPopper, XCircle, Lightbulb } from 'lucide-react'
 import { api } from '../lib/api.js'
+import { exportar } from '../lib/relatorio.js'
+import ExportMenu from '../components/ExportMenu.jsx'
+import { cmvRelatorio, totalCmv, engenharia } from '../lib/cmv.js'
 import { money, moneyShort, dateBR, today, toISO } from '../lib/format.js'
 import {
   UNIDADES, CATEGORIAS, GRUPOS, INICIO, buildContas, resumoContas, vendasPorDia, calcMeta, comparativo, mixPagamentos,
-  mesesDre, dre, parseFixos, detectImport, addDaysISO, mesNome, okUnidade,
+  mesesDre, dre, transferidoHubs, totalEvento, parseFixos, detectImport, addDaysISO, mesNome, okUnidade,
   CATS_PRODUTO, SEM_CAT, categoriaDe, parse3lmItens, rankingProdutos, agrupa,
 } from '../lib/fin.js'
 import { Modal, SortTh, useToast, useConfirm } from '../components/ui.jsx'
@@ -68,6 +71,8 @@ export default function FinPanel({ store, tab }) {
       {tab === 'fin-produtos' && <Produtos ctx={ctx} />}
       {tab === 'fin-dre' && <Dre ctx={ctx} />}
       {tab === 'fin-fixos' && <Fixos ctx={ctx} />}
+      {tab === 'fin-eventos' && <Eventos ctx={ctx} />}
+      {tab === 'fin-insights' && <Insights ctx={ctx} />}
       {importing && <ImportFin store={store} onClose={() => setImporting(false)} />}
       {novaConta && <ContaForm store={store} conta={novaConta} onClose={() => setNovaConta(null)} />}
     </>
@@ -541,7 +546,15 @@ function Produtos({ ctx }) {
       <div className="card">
         <div className="card-head">
           <div><h3>Ranking completo</h3><p>Classe A soma os primeiros 80% do faturamento, B os 15% seguintes e C o resto.{R.temAnt ? ` A variação compara com ${dateBR(R.antDe)} a ${dateBR(R.antAte)}.` : ''}</p></div>
-          <input className="input" style={{ maxWidth: 220 }} placeholder="Buscar produto" value={busca} onChange={(e) => setBusca(e.target.value)} aria-label="Buscar produto" />
+          <div className="head-actions">
+            <input className="input" style={{ maxWidth: 220 }} placeholder="Buscar produto" value={busca} onChange={(e) => setBusca(e.target.value)} aria-label="Buscar produto" />
+            <ExportMenu onExport={(formato) => exportar({
+              titulo: 'Produtos vendidos', arquivo: 'produtos', subtitulo: `${dateBR(de)} a ${dateBR(ate)}${categoria ? ` · ${categoria}` : ''}`,
+              resumo: [['Faturamento', money(R.total)], ['Itens vendidos', qtdFmt(R.qtdTotal)], ['Produtos com venda', String(R.rows.length)]],
+              colunas: [{ h: '#', tipo: 'num', w: 6 }, { h: 'Produto', w: 32 }, { h: 'Código', w: 10 }, { h: 'Tipo', w: 14 }, { h: 'Qtd', tipo: 'num' }, { h: 'Faturamento', tipo: 'money' }, { h: '% do total', tipo: 'pct' }, { h: 'Classe', w: 8 }],
+              linhas: ordenados.map((r) => ({ c: [rank.get(r.codigo), nomeProd(r.nome), r.codigo, r.categoria, r.qtd, r.valor, r.share, r.classe] })),
+            }, formato)} />
+          </div>
         </div>
         <div className="table-wrap" style={{ maxHeight: '62vh' }}>
           <table className="data">
@@ -633,18 +646,50 @@ function CategoriasForm({ store, itens, produtos, onClose }) {
 // DRE
 // =====================================================================
 function Dre({ ctx }) {
-  const { fin, contas, unidade, hoje } = ctx
+  const { fin, contas, unidade, hoje, store } = ctx
+  const toast = useToast()
   const meses = useMemo(() => mesesDre(fin, contas, hoje), [fin, contas, hoje])
   const [mes, setMes] = useState(meses.includes(hoje.slice(0, 7)) ? hoje.slice(0, 7) : meses[meses.length - 1] || hoje.slice(0, 7))
-  const d = useMemo(() => dre(contas, fin.vendas, mes, unidade), [contas, fin.vendas, mes, unidade])
+  const [modo, setModo] = useState('completa')
+  const transferido = useMemo(() => transferidoHubs(store.transfers, store.units, mes), [store.transfers, store.units, mes])
+  const d = useMemo(() => dre(contas, fin.vendas, mes, unidade, { eventos: fin.eventos, modo, transferido }), [contas, fin.vendas, fin.eventos, mes, unidade, modo, transferido])
   const fmt = (v) => (v === null || v === undefined ? '' : money(v))
+  const op = modo === 'operacional'
+  const exp = async (formato, m) => {
+    const x = m === modo ? d : dre(contas, fin.vendas, mes, unidade, { eventos: fin.eventos, modo: m, transferido })
+    const opx = m === 'operacional'
+    try {
+      await exportar({
+        titulo: opx ? 'DRE operacional da loja' : 'DRE gerencial', arquivo: opx ? `dre_operacional_${mes}` : `dre_${mes}`,
+        subtitulo: `${mesNome(mes)} · ${opx ? 'ZN Salão, sem eventos, sem royalties, legado e BV, CMV sem o enviado aos hubs' : unidade === 'Todas' ? 'Todas as unidades' : unidade}`,
+        resumo: [['Receita bruta', money(x.receita)], ['CMV (previsto)', pct(x.cmvPct)], ['EBITDA (atual)', money(x.linhas.find((l) => l.nome === 'EBITDA operacional').pago)], ['EBITDA (previsto)', money(x.linhas.find((l) => l.nome === 'EBITDA operacional').total)]],
+        colunas: [{ h: 'Linha', w: 34 }, { h: 'Atual', tipo: 'money' }, { h: 'A pagar', tipo: 'money' }, { h: 'Total do mês', tipo: 'money' }, { h: '% receita (total)', tipo: 'pct' }],
+        linhas: x.linhas.map((l) => {
+          const s = l.sinal || 1; const isTot = l.tipo === 'tot'
+          const atual = isTot ? l.pago : s * (l.pago || 0); const total = isTot ? l.total : s * (l.total || 0)
+          return { c: [l.nome, atual, isTot || !l.aberto ? null : s * l.aberto, total, x.base && Math.abs(total) > 0.004 ? total / x.base : null], forte: isTot, sub: l.tipo.includes('sub') }
+        }),
+        notas: ['Atual = despesas já pagas e vendas até hoje. Total do mês = atual + o que ainda está a pagar no mês.',
+          opx ? `Operacional: considera só a ZN Salão, sem receita de eventos e sem royalties, passivo das unidades encerradas e investimento na BV. O CMV é descontado dos insumos enviados aos hubs no mês (${money(x.hub)}, pelo valor das transferências).` : 'Royalties, passivo do legado e investimento na BV ficam abaixo do EBITDA. Eventos realizados entram na receita bruta.'],
+      }, formato)
+    } catch (e) { toast(e.message, 'error') }
+  }
   return (
     <div className="card">
       <div className="card-head">
-        <div><h3>DRE gerencial</h3><p>Por competência. Royalties, passivo do legado e investimento na BV ficam abaixo do EBITDA, para não distorcer a operação.</p></div>
-        <select className="select" style={{ width: 190 }} value={mes} onChange={(e) => setMes(e.target.value)} aria-label="Mês">
-          {meses.map((m) => <option key={m} value={m}>{mesNome(m)}</option>)}
-        </select>
+        <div><h3>{op ? 'DRE operacional da loja' : 'DRE gerencial'}</h3><p>{op
+          ? 'Só a ZN Salão, como se fosse a única operação: sem eventos, sem royalties, legado e BV, e com o CMV descontado do que foi enviado aos hubs.'
+          : 'Por competência. Royalties, passivo do legado e investimento na BV ficam abaixo do EBITDA, para não distorcer a operação.'}</p></div>
+        <div className="head-actions">
+          <div className="seg" role="group" aria-label="Tipo de DRE">
+            <button aria-pressed={!op} onClick={() => setModo('completa')}>Completa</button>
+            <button aria-pressed={op} onClick={() => setModo('operacional')}>Operacional da loja</button>
+          </div>
+          <select className="select" style={{ width: 170 }} value={mes} onChange={(e) => setMes(e.target.value)} aria-label="Mês">
+            {meses.map((m) => <option key={m} value={m}>{mesNome(m)}</option>)}
+          </select>
+          <ExportMenu onExport={(f, m) => exp(f, m)} opcoes={[['completa', 'DRE completa'], ['operacional', 'DRE operacional da loja']]} />
+        </div>
       </div>
       <div className="table-wrap" style={{ borderTop: 0 }}>
         <table className="data fin-dre">
@@ -658,7 +703,7 @@ function Dre({ ctx }) {
               const vazio = !isTot && !l.total
               return (
                 <tr key={l.nome} className={`${l.tipo} ${l.destaque ? 'destaque' : ''}`}>
-                  <td>{l.nome}</td>
+                  <td>{l.tipo.includes('sub') ? <span className="dre-sub">{l.nome}</span> : l.nome}</td>
                   <td className="num">{vazio ? <span className="muted">—</span> : <>
                     <span className={isTot && atual < 0 ? 'txt-danger' : ''}>{fmt(atual)}</span>
                     {Math.abs(total - atual) > 0.004 && <small className={`dre-total ${isTot && total < 0 ? 'txt-danger' : 'muted'}`}> ({fmt(total)})</small>}
@@ -672,10 +717,299 @@ function Dre({ ctx }) {
         </table>
       </div>
       <p className="hint" style={{ padding: '0 16px 16px', margin: 0 }}>
-        Cada linha mostra o valor atual (despesas já pagas e vendas até hoje) e, entre parênteses, o total previsto do mês com o que ainda está a pagar. CMV no mês: <b>{pct(d.cmvPct)}</b> da receita bruta.
-        A competência dos boletos do 3LM ainda é a data de vencimento, então o CMV pode incluir compras do mês anterior. Pessoal, aluguel e energia entram quando forem cadastrados em Custos fixos.
+        Cada linha mostra o valor atual (despesas já pagas e vendas até hoje) e, entre parênteses, o total previsto do mês com o que ainda está a pagar. CMV no mês: <b>{pct(d.cmvPctAtual)}</b> <span className="muted">({pct(d.cmvPct)})</span> da receita bruta{op ? ', já sem o enviado aos hubs' : ''}.
+        {d.eventos > 0 && <> Eventos realizados no mês: <b>{money(d.eventos)}</b>.</>}
+        {' '}A competência dos boletos do 3LM ainda é a data de vencimento, então o CMV pode incluir compras do mês anterior. Pessoal, aluguel e energia entram quando forem cadastrados em Custos fixos.
       </p>
     </div>
+  )
+}
+
+// =====================================================================
+// Eventos (vendas fora da 3LM): agenda + confirmação + baixa no estoque
+// =====================================================================
+const EV_PILL = { agendado: 'accent', realizado: 'good', cancelado: '' }
+const EV_LABEL = { agendado: 'Agendado', realizado: 'Realizado', cancelado: 'Não aconteceu' }
+
+function Eventos({ ctx }) {
+  const { store, fin, hoje } = ctx
+  const toast = useToast()
+  const confirm = useConfirm()
+  const [edit, setEdit] = useState(null)
+  const [filtro, setFiltro] = useState('')
+  const eventos = fin.eventos || []
+  const mes = hoje.slice(0, 7)
+  const pendentes = eventos.filter((e) => e.status === 'agendado' && e.dia <= hoje)
+  const proximos = eventos.filter((e) => e.status === 'agendado' && e.dia > hoje)
+  const realizadosMes = eventos.filter((e) => e.status === 'realizado' && e.dia.startsWith(mes))
+  const rows = eventos.filter((e) => !filtro || (filtro === 'pend' ? e.status === 'agendado' && e.dia <= hoje : e.status === filtro))
+    .sort((a, b) => {
+      const ag = (e) => (e.status === 'agendado' ? 0 : 1)
+      return ag(a) - ag(b) || (ag(a) === 0 ? a.dia.localeCompare(b.dia) : b.dia.localeCompare(a.dia))
+    })
+  const setStatus = async (e, status) => {
+    if (status === 'realizado' && !(await confirm({ title: 'Evento aconteceu', message: `Confirmar "${e.nome}" (${dateBR(e.dia)})? Ele entra na receita de eventos (${money(totalEvento(e))}) e os itens baixam do estoque pela ficha técnica.`, ok: 'Confirmar' }))) return
+    try { await api.finSetEventoStatus(e.id, status); store.setFin((f) => ({ ...f, eventos: f.eventos.map((x) => (x.id === e.id ? { ...x, status } : x)) })); toast(status === 'realizado' ? 'Evento confirmado. Estoque e DRE atualizados.' : status === 'cancelado' ? 'Marcado como não aconteceu.' : 'Voltou para agendado.') } catch (er) { toast(er.message, 'error') }
+  }
+  const remove = async (e) => {
+    if (!(await confirm({ title: 'Excluir evento', message: `Excluir "${e.nome}"?`, ok: 'Excluir', danger: true }))) return
+    try { await api.finDeleteEvento(e.id); store.setFin((f) => ({ ...f, eventos: f.eventos.filter((x) => x.id !== e.id) })) } catch (er) { toast(er.message, 'error') }
+  }
+  const exp = (formato) => exportar({
+    titulo: 'Eventos', arquivo: 'eventos', subtitulo: 'Vendas fora da 3LM (nota emitida à parte)',
+    resumo: [['Realizados no mês', money(realizadosMes.reduce((t, e) => t + totalEvento(e), 0))], ['Próximos', String(proximos.length)], ['Aguardando confirmação', String(pendentes.length)]],
+    colunas: [{ h: 'Data', w: 12 }, { h: 'Evento', w: 30 }, { h: 'Cliente', w: 22 }, { h: 'Nota', w: 12 }, { h: 'Situação', w: 16 }, { h: 'Itens', w: 40 }, { h: 'Total', tipo: 'money' }],
+    linhas: rows.map((e) => ({ c: [dateBR(e.dia), e.nome, e.cliente || '', e.nota || '', EV_LABEL[e.status], (e.itens || []).map((i) => `${qtdFmt(i.qtd)}× ${nomeProd(i.nome)} a ${money(i.preco)}`).join('; '), totalEvento(e)] })),
+  }, formato).catch((er) => toast(er.message, 'error'))
+
+  return (
+    <>
+      <div className="kpis">
+        <Kpi icon={PartyPopper} label="Realizados no mês" value={money(realizadosMes.reduce((t, e) => t + totalEvento(e), 0))} sub={`${realizadosMes.length} evento${realizadosMes.length === 1 ? '' : 's'} · entra na DRE como Eventos`} tone="good" />
+        <Kpi icon={CalendarDays} label="Próximos" value={proximos.length} sub={proximos[0] ? `${dateBR(proximos[0].dia)} · ${proximos[0].nome}` : 'nenhum agendado'} />
+        <Kpi icon={AlertTriangle} label="Aguardando confirmação" value={pendentes.length} sub={pendentes.length ? 'a data passou: aconteceu?' : 'nada pendente'} tone={pendentes.length ? 'warn' : ''} />
+      </div>
+      <div className="card">
+        <div className="card-head">
+          <div><h3>Agenda de eventos</h3><p>Evento agendado não mexe em nada. Quando você confirma que aconteceu, ele entra na receita (linha Eventos da DRE) e os itens baixam do estoque pela ficha técnica.</p></div>
+          <div className="head-actions">
+            <ExportMenu onExport={exp} />
+            <button className="btn primary" onClick={() => setEdit({ dia: hoje, nome: '', cliente: '', nota: '', obs: '', status: 'agendado', itens: [] })}><Plus />Novo evento</button>
+          </div>
+        </div>
+        <div className="filters fin-filters">
+          <div className="seg" role="group" aria-label="Situação">
+            {[['', 'Todos'], ['pend', 'Aguardando confirmação'], ['agendado', 'Agendados'], ['realizado', 'Realizados'], ['cancelado', 'Não aconteceram']].map(([k, l]) => <button key={k} aria-pressed={filtro === k} onClick={() => setFiltro(k)}>{l}</button>)}
+          </div>
+        </div>
+        <div className="table-wrap" style={{ maxHeight: '62vh' }}>
+          <table className="data">
+            <thead><tr><th>Data</th><th>Evento</th><th className="hide-sm">Nota</th><th className="hide-sm">Itens</th><th>Situação</th><th className="num">Total</th><th /></tr></thead>
+            <tbody>
+              {rows.map((e) => (
+                <tr key={e.id}>
+                  <td className="nowrap">{dateBR(e.dia)}</td>
+                  <td><strong>{e.nome}</strong>{e.cliente && <small className="muted"> · {e.cliente}</small>}</td>
+                  <td className="hide-sm muted">{e.nota || '—'}</td>
+                  <td className="hide-sm muted">{(e.itens || []).map((i) => `${qtdFmt(i.qtd)} ${nomeProd(i.nome)}`).join(', ') || '—'}</td>
+                  <td><span className={`pill ${e.status === 'agendado' && e.dia <= hoje ? 'warn' : EV_PILL[e.status]}`}>{e.status === 'agendado' && e.dia <= hoje ? 'Aconteceu?' : EV_LABEL[e.status]}</span></td>
+                  <td className="num"><strong>{money(totalEvento(e))}</strong></td>
+                  <td className="nowrap" style={{ textAlign: 'right' }}>
+                    {e.status === 'agendado' && <>
+                      <button className="btn success sm" onClick={() => setStatus(e, 'realizado')} title="Aconteceu: baixa o estoque e entra na receita"><CheckCircle2 />Sim</button>{' '}
+                      <button className="btn sm" onClick={() => setStatus(e, 'cancelado')} title="Não aconteceu"><XCircle />Não</button>
+                    </>}
+                    {e.status !== 'agendado' && <button className="btn ghost sm" onClick={() => setStatus(e, 'agendado')} title="Voltar para agendado"><Undo2 /></button>}
+                    <button className="btn ghost icon" title="Editar" aria-label="Editar evento" onClick={() => setEdit(e)}><Pencil /></button>
+                    <button className="btn ghost icon" title="Excluir" aria-label="Excluir evento" onClick={() => remove(e)}><Trash2 /></button>
+                  </td>
+                </tr>
+              ))}
+              {!rows.length && <tr><td colSpan={7}><div className="empty"><PartyPopper /><div>Nenhum evento {filtro ? 'nesse filtro' : 'cadastrado'}.</div></div></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {edit && <EventoForm store={store} fin={fin} evento={edit} onClose={() => setEdit(null)} />}
+    </>
+  )
+}
+
+function EventoForm({ store, fin, evento, onClose }) {
+  const toast = useToast()
+  const [f, setF] = useState({ ...evento })
+  const [itens, setItens] = useState((evento.itens || []).map((i) => ({ ...i, qtd: String(i.qtd).replace('.', ','), preco: String(i.preco).replace('.', ',') })))
+  const [busy, setBusy] = useState(false)
+  const cardapio = useMemo(() => {
+    const m = new Map()
+    for (const p of fin.pratos || []) m.set(p.codigo, { codigo: p.codigo, nome: p.nome, preco: Number(p.preco_venda) || 0 })
+    for (const i of fin.itens || []) if (!m.has(i.codigo) && !/REFILL?/i.test(i.nome)) m.set(i.codigo, { codigo: i.codigo, nome: i.nome, preco: i.qtd ? i.valor / i.qtd : 0 })
+    return [...m.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'))
+  }, [fin])
+  const nb = (v) => Number(String(v ?? '').replace(/\./g, '').replace(',', '.')) || 0
+  const total = itens.reduce((t, i) => t + nb(i.qtd) * nb(i.preco), 0)
+  const add = (codigo) => {
+    const p = cardapio.find((x) => x.codigo === codigo); if (!p) return
+    if (itens.some((i) => i.codigo === codigo)) return toast('Esse item já está na lista.', 'error')
+    setItens([...itens, { codigo: p.codigo, nome: p.nome, qtd: '1', preco: String(Math.round(p.preco * 100) / 100).replace('.', ',') }])
+  }
+  const upd = (k, patch) => setItens(itens.map((i, j) => (j === k ? { ...i, ...patch } : i)))
+  const save = async (e) => {
+    e.preventDefault()
+    const rows = itens.map((i) => ({ codigo: i.codigo, nome: i.nome, qtd: nb(i.qtd), preco: nb(i.preco) })).filter((i) => i.qtd > 0)
+    if (!f.nome.trim() || !f.dia) return toast('Preencha a data e o nome do evento.', 'error')
+    if (!rows.length) return toast('Inclua os itens vendidos, para o estoque baixar certo.', 'error')
+    setBusy(true)
+    try {
+      const saved = await api.finSaveEvento({ id: f.id, dia: f.dia, nome: f.nome.trim(), cliente: f.cliente?.trim() || null, nota: f.nota?.trim() || null, obs: f.obs?.trim() || null, status: f.status || 'agendado' }, rows)
+      store.setFin((x) => ({ ...x, eventos: [...(x.eventos || []).filter((ev) => ev.id !== saved.id), saved] }))
+      toast('Evento salvo.'); onClose()
+    } catch (er) { toast(er.message, 'error') } finally { setBusy(false) }
+  }
+  return (
+    <Modal title={evento.id ? 'Editar evento' : 'Novo evento'} onClose={onClose} wide
+      footer={<><button className="btn" onClick={onClose}>Cancelar</button><button className="btn primary" form="fev" disabled={busy}>{busy ? 'Salvando…' : 'Salvar'}</button></>}>
+      <form id="fev" onSubmit={save} className="stack">
+        <div className="grid-2">
+          <label className="field"><span>Data (pode ser futura)</span><input type="date" className="input" value={f.dia} onChange={(e) => setF({ ...f, dia: e.target.value })} required /></label>
+          <label className="field"><span>Evento</span><input className="input" value={f.nome} onChange={(e) => setF({ ...f, nome: e.target.value })} placeholder="Ex.: Aniversário Colégio X" required autoFocus /></label>
+          <label className="field"><span>Cliente</span><input className="input" value={f.cliente || ''} onChange={(e) => setF({ ...f, cliente: e.target.value })} /></label>
+          <label className="field"><span>Nº da nota</span><input className="input" value={f.nota || ''} onChange={(e) => setF({ ...f, nota: e.target.value })} placeholder="Pode preencher depois" /></label>
+        </div>
+        <label className="field"><span>Adicionar item do cardápio</span>
+          <select className="select" value="" onChange={(e) => add(e.target.value)}>
+            <option value="">Escolha um item…</option>
+            {cardapio.map((p) => <option key={p.codigo} value={p.codigo}>{nomeProd(p.nome)} ({p.codigo})</option>)}
+          </select>
+        </label>
+        {itens.length > 0 && (
+          <div className="table-wrap">
+            <table className="data ev-itens">
+              <thead><tr><th>Item</th><th className="num">Qtd</th><th className="num">Preço especial</th><th className="num">Subtotal</th><th /></tr></thead>
+              <tbody>
+                {itens.map((i, k) => (
+                  <tr key={i.codigo}>
+                    <td>{nomeProd(i.nome)} <small className="muted">{i.codigo}</small></td>
+                    <td className="num"><input className="input num" style={{ width: 80 }} inputMode="decimal" value={i.qtd} onChange={(e) => upd(k, { qtd: e.target.value })} aria-label={`Quantidade de ${i.nome}`} /></td>
+                    <td className="num"><input className="input num" style={{ width: 100 }} inputMode="decimal" value={i.preco} onChange={(e) => upd(k, { preco: e.target.value })} aria-label={`Preço de ${i.nome}`} /></td>
+                    <td className="num">{money(nb(i.qtd) * nb(i.preco))}</td>
+                    <td><button type="button" className="btn ghost icon" aria-label="Remover item" onClick={() => setItens(itens.filter((_, j) => j !== k))}><Trash2 /></button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div className="ev-total"><span className="muted">Total do pedido</span><b>{money(total)}</b></div>
+        <label className="field"><span>Observação</span><input className="input" value={f.obs || ''} onChange={(e) => setF({ ...f, obs: e.target.value })} /></label>
+        <p className="hint" style={{ margin: 0 }}>O preço já vem do cardápio; troque pelo preço especial combinado. A baixa no estoque só acontece quando você marcar que o evento aconteceu.</p>
+      </form>
+    </Modal>
+  )
+}
+
+// =====================================================================
+// Insights: engenharia de cardápio, CMV teórico, N1 promo e análises
+// =====================================================================
+const CATS_MENU = ['Burgers', 'Batatas', 'Hot dogs', 'Milk shake', 'Bebidas', 'Sobremesas', 'Combos']
+const CLASSE_INS = {
+  Estrela: ['good', 'Vende muito e dá boa margem. Proteger: manter receita, destaque no cardápio.'],
+  Âncora: ['accent', 'Vende muito, margem abaixo da média. Puxa gente: testar ajuste pequeno de preço ou porção/custo.'],
+  'Quebra-cabeça': ['warn', 'Boa margem, vende pouco. Dar visibilidade, sugerir no balcão, combo.'],
+  Repensar: ['danger', 'Vende pouco e margem baixa. Rever receita, preço ou tirar, salvo se for de posicionamento.'],
+}
+
+function Insights({ ctx }) {
+  const { fin, store, hoje } = ctx
+  const toast = useToast()
+  const confirm = useConfirm()
+  const [est, setEst] = useState(null)
+  const [erro, setErro] = useState('')
+  React.useEffect(() => { api.estLoad().then(setEst).catch((e) => setErro(e.message)) }, [])
+  const ultimo = (fin.itens || []).reduce((mx, r) => (r.dia > mx ? r.dia : mx), '')
+  const [mes, setMes] = useState((ultimo || hoje).slice(0, 7))
+  const meses = [...new Set((fin.itens || []).map((i) => i.dia.slice(0, 7)))].sort()
+  const de = `${mes}-01`; const ate = mes === (ultimo || '').slice(0, 7) ? ultimo : toISO(new Date(Number(mes.slice(0, 4)), Number(mes.slice(5, 7)), 0))
+  const prodMap = useMemo(() => Object.fromEntries((fin.produtos || []).map((p) => [p.codigo, p])), [fin.produtos])
+  const R = useMemo(() => (est ? cmvRelatorio({ est, fin, transfers: store.transfers, units: store.units, de, ate }) : null), [est, fin, store.transfers, store.units, de, ate])
+  if (erro) return <div className="card"><div className="empty"><AlertTriangle /><div>{erro}</div></div></div>
+  if (!R) return <div className="center-screen"><div className="spinner" /></div>
+
+  const dias = new Set((fin.itens || []).filter((i) => i.dia >= de && i.dia <= ate).map((i) => i.dia)).size || 1
+  const [yy, mm] = mes.split('-').map(Number); const diasMes = new Date(yy, mm, 0).getDate()
+  const menu = R.produtos.filter((p) => !p.promo && CATS_MENU.includes(categoriaDe(p.codigo, prodMap)))
+  const eng = engenharia(menu)
+  const loja = R.grupos.find((g) => g.key === 'loja'); const promo = R.grupos.find((g) => g.key === 'promo')
+  const comPromo = totalCmv(R.grupos, { promo: true })
+  const promoP = R.produtos.filter((p) => p.promo)
+  const promoQtd = promoP.reduce((t, p) => t + p.qtd, 0)
+  const margemTot = R.produtos.reduce((t, p) => t + (p.margem || 0), 0)
+  const quad = Object.keys(CLASSE_INS).map((k) => ({ k, n: eng.rows.filter((r) => r.classe === k).length, m: eng.rows.filter((r) => r.classe === k).reduce((t, r) => t + r.margem, 0) }))
+  const proj = (x) => (x / dias) * diasMes
+  const atencao = []
+  const caros = menu.filter((p) => p.cmv != null && p.cmv > 0.35 && p.qtd >= 5).sort((a, b) => b.cmv - a.cmv)
+  if (caros.length) atencao.push(`CMV acima de 35%: ${caros.slice(0, 5).map((p) => `${nomeProd(p.nome)} (${pct(p.cmv)})`).join(', ')}. Conferir ficha técnica e preço.`)
+  const ancoras = eng.rows.filter((r) => r.classe === 'Âncora').sort((a, b) => b.qtd - a.qtd)
+  if (ancoras.length) atencao.push(`Âncoras (vendem muito, margem abaixo da média de ${money(eng.margemMedia)}): ${ancoras.slice(0, 4).map((r) => `${nomeProd(r.nome)}, +R$ 1 renderia ~${money(proj(r.qtd))}/mês`).join('; ')}.`)
+  if (promo.receita) atencao.push(`N1 promo: ${qtdFmt(promoQtd)} lanches a ${money(promo.receita / (promoQtd || 1))}, CMV de ${pct(promo.cmv)}. Ela leva o CMV do cardápio de ${pct(loja.cmv)} para ${pct(comPromo.cmv)} (${((comPromo.cmv - loja.cmv) * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} p.p.), mas deixa ${money(promo.receita - promo.custo)} de margem bruta.`)
+  if (R.semFicha.length) atencao.push(`${R.semFicha.length} produto${R.semFicha.length > 1 ? 's' : ''} vendido${R.semFicha.length > 1 ? 's' : ''} sem ficha técnica (${R.semFicha.slice(0, 5).map((p) => nomeProd(p.nome)).join(', ')}): ficam fora do CMV teórico.`)
+  const repensar = eng.rows.filter((r) => r.classe === 'Repensar' && !r.estrategico)
+  if (repensar.length) atencao.push(`Para rever: ${repensar.slice(0, 5).map((r) => nomeProd(r.nome)).join(', ')}. Se algum for de posicionamento (ex.: hot dog), marque na tabela para não aparecer aqui.`)
+
+  const toggleEstr = async (p) => {
+    try { await api.estSavePrato(p.codigo, { estrategico: !p.estrategico }); setEst((e) => ({ ...e, pratos: e.pratos.map((x) => (x.codigo === p.codigo ? { ...x, estrategico: !p.estrategico } : x)) })) } catch (e) { toast(e.message, 'error') }
+  }
+  const delNota = async (n) => {
+    if (!(await confirm({ title: 'Excluir análise', message: `Excluir "${n.titulo}"?`, ok: 'Excluir', danger: true }))) return
+    try { await api.finDeleteInsight(n.id); store.setFin((f) => ({ ...f, insights: f.insights.filter((x) => x.id !== n.id) })) } catch (e) { toast(e.message, 'error') }
+  }
+  const exp = (formato) => exportar({
+    titulo: 'Engenharia de cardápio', arquivo: `cardapio_${mes}`, subtitulo: `${dateBR(de)} a ${dateBR(ate)} · custo pela ficha técnica × preço médio dos insumos`,
+    resumo: [['CMV cardápio (sem promo)', pct(loja.cmv)], ['CMV com N1 promo', pct(comPromo.cmv)], ['Margem bruta', money(margemTot)], ['Margem média/un', money(eng.margemMedia)]],
+    colunas: [{ h: 'Produto', w: 30 }, { h: 'Classe', w: 14 }, { h: 'Qtd', tipo: 'num' }, { h: 'Preço médio', tipo: 'money' }, { h: 'Custo/un', tipo: 'money' }, { h: 'Margem/un', tipo: 'money' }, { h: 'Margem total', tipo: 'money' }, { h: 'CMV', tipo: 'pct' }],
+    linhas: eng.rows.map((r) => ({ c: [nomeProd(r.nome) + (r.estrategico ? ' (posicionamento)' : ''), r.classe, r.qtd, r.precoMedio, r.custoUnit, r.margemUnit, r.margem, r.cmv] })),
+    notas: Object.entries(CLASSE_INS).map(([k, [, t]]) => `${k}: ${t}`),
+  }, formato).catch((e) => toast(e.message, 'error'))
+
+  return (
+    <>
+      <div className="card" style={{ marginBottom: 12 }}>
+        <div className="filters fin-filters">
+          <select className="select" style={{ width: 190 }} value={mes} onChange={(e) => setMes(e.target.value)} aria-label="Mês">{meses.map((m) => <option key={m} value={m}>{mesNome(m)}</option>)}</select>
+          <span className="muted">{dateBR(de)} a {dateBR(ate)} · {dias} dia{dias === 1 ? '' : 's'} com venda · custo pela ficha técnica × preço médio dos insumos</span>
+          <div style={{ marginLeft: 'auto' }}><ExportMenu onExport={exp} /></div>
+        </div>
+      </div>
+      <div className="kpis">
+        <Kpi icon={Target} label="CMV do cardápio" value={pct(loja.cmv)} sub="teórico, sem a N1 promo" tone={loja.cmv > 0.32 ? 'warn' : 'good'} />
+        <Kpi icon={AlertTriangle} label="Com a N1 promo" value={pct(comPromo.cmv)} sub={`${qtdFmt(promoQtd)} lanches · CMV da promo ${pct(promo.cmv)}`} tone="warn" />
+        <Kpi icon={Wallet} label="Margem bruta dos produtos" value={money(margemTot)} sub={`${money(margemTot / dias)} por dia`} />
+        <Kpi icon={ChartBarBig} label="Margem média por item" value={money(eng.margemMedia)} sub={`${eng.rows.length} itens do cardápio analisados`} />
+      </div>
+      {atencao.length > 0 && (
+        <div className="card" style={{ marginBottom: 12 }}>
+          <div className="card-head"><div><h3>Pontos de atenção</h3><p>Calculados sozinhos com as vendas e as fichas técnicas do período.</p></div></div>
+          <ul style={{ margin: 0, padding: '0 16px 16px 34px', lineHeight: 1.6 }}>{atencao.map((t, i) => <li key={i}>{t}</li>)}</ul>
+        </div>
+      )}
+      <div className="card" style={{ marginBottom: 12 }}>
+        <div className="card-head"><div><h3>Engenharia de cardápio</h3><p>Popularidade (participação nas vendas contra 70% da média) × margem por unidade (contra a média ponderada de {money(eng.margemMedia)}). Marque os de posicionamento, que ficam no cardápio pela marca mesmo com margem baixa.</p></div></div>
+        <div className="ins-quad">
+          {quad.map((q) => <div key={q.k}><span className={`pill ${CLASSE_INS[q.k][0]}`}>{q.k}</span><b>{q.n}</b><small>{money(q.m)} de margem · {CLASSE_INS[q.k][1]}</small></div>)}
+        </div>
+        <div className="table-wrap" style={{ maxHeight: '60vh' }}>
+          <table className="data">
+            <thead><tr><th>Produto</th><th>Classe</th><th className="num">Qtd</th><th className="num hide-sm">Preço médio</th><th className="num hide-sm">Custo/un</th><th className="num">Margem/un</th><th className="num">Margem total</th><th className="num">CMV</th><th title="Produto de posicionamento">Posic.</th></tr></thead>
+            <tbody>
+              {eng.rows.map((r) => (
+                <tr key={r.codigo}>
+                  <td><strong>{nomeProd(r.nome)}</strong> <small className="muted">{r.codigo}</small></td>
+                  <td><span className={`pill ${CLASSE_INS[r.classe][0]}`}>{r.classe}</span></td>
+                  <td className="num">{qtdFmt(r.qtd)}</td>
+                  <td className="num hide-sm">{money(r.precoMedio)}</td>
+                  <td className="num hide-sm">{money(r.custoUnit)}</td>
+                  <td className="num">{money(r.margemUnit)}</td>
+                  <td className="num"><strong>{money(r.margem)}</strong></td>
+                  <td className={`num ${r.cmv > 0.35 ? 'txt-danger' : ''}`}>{pct(r.cmv)}</td>
+                  <td><input type="checkbox" className="check" checked={r.estrategico} onChange={() => toggleEstr(r)} aria-label={`${nomeProd(r.nome)} é de posicionamento`} /></td>
+                </tr>
+              ))}
+              {!eng.rows.length && <tr><td colSpan={9}><div className="empty"><Inbox /><div>Sem vendas com ficha técnica no período.</div></div></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div className="card">
+        <div className="card-head"><div><h3>Análises</h3><p>Conclusões das análises feitas no chat com o Claude (extratos, compras, cardápio). Ficam registradas aqui.</p></div></div>
+        {(fin.insights || []).slice().sort((a, b) => b.dia.localeCompare(a.dia)).map((n) => (
+          <div key={n.id} className="ins-nota">
+            <h4>{n.titulo} <small className="muted">· {dateBR(n.dia)}{n.tag ? ` · ${n.tag}` : ''}</small> <button className="btn ghost icon" style={{ float: 'right' }} aria-label="Excluir análise" onClick={() => delNota(n)}><Trash2 /></button></h4>
+            <p>{n.texto}</p>
+          </div>
+        ))}
+        {!(fin.insights || []).length && <div className="empty"><Lightbulb /><div>Nenhuma análise registrada ainda. A primeira vem com os extratos do banco.</div></div>}
+      </div>
+    </>
   )
 }
 
