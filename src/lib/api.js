@@ -247,6 +247,12 @@ function supabaseApi() {
     },
     async estSaveInsumo(codigo, patch) { ok(await sb.from('est_insumos').update({ ...patch, updated_at: new Date().toISOString() }).eq('codigo', codigo)) },
     async estSavePrato(codigo, patch) { ok(await sb.from('est_pratos').update(patch).eq('codigo', codigo)) },
+    async estAddInsumo(row) { ok(await sb.from('est_insumos').insert(row)) },
+    async estUpsertPrato(row) { ok(await sb.from('est_pratos').upsert({ ...row, updated_at: new Date().toISOString() }, { onConflict: 'codigo' })) },
+    async estSaveFicha(produto, linhas) {
+      ok(await sb.from('est_fichas').delete().eq('produto_codigo', produto))
+      if (linhas.length) ok(await sb.from('est_fichas').insert(linhas.map((l) => ({ produto_codigo: produto, insumo_codigo: l.insumo_codigo, qtd: l.qtd }))))
+    },
     async estAddMovs(rows) { return ok(await sb.from('est_movs').insert(rows).select()) },
     async estDeleteMov(m) { ok(m.lote ? await sb.from('est_movs').delete().eq('lote', m.lote) : await sb.from('est_movs').delete().eq('id', m.id)) },
     async estNovaContagem(corte) { return ok(await sb.from('est_contagens').insert({ corte }).select().single()) },
@@ -498,6 +504,9 @@ function demoApi() {
     },
     async estSaveInsumo(codigo, patch) { const e = loadEst(); Object.assign(e.insumos.find((i) => i.codigo === codigo), patch); saveEst() },
     async estSavePrato(codigo, patch) { const e = loadEst(); Object.assign(e.pratos.find((i) => i.codigo === codigo), patch); saveEst() },
+    async estAddInsumo(row) { const e = loadEst(); if (e.insumos.some((i) => i.codigo === row.codigo)) throw new Error('Já existe um insumo com esse código.'); e.insumos.push({ estoque_min: 0, tolerancia: 0.03, preco_medio: 0, preco_ultimo: 0, ...row }); saveEst() },
+    async estUpsertPrato(row) { const e = loadEst(); const o = e.pratos.find((p) => p.codigo === row.codigo); if (o) Object.assign(o, row); else e.pratos.push({ estrategico: false, ...row }); saveEst() },
+    async estSaveFicha(produto, linhas) { const e = loadEst(); e.fichas = [...e.fichas.filter((f) => f.produto_codigo !== produto), ...linhas.map((l) => ({ produto_codigo: produto, insumo_codigo: l.insumo_codigo, qtd: l.qtd }))]; saveEst() },
     async estAddMovs(rows) { const e = loadEst(); const out = rows.map((r) => ({ id: uid(), created_at: new Date().toISOString(), ...r })); e.movs.push(...out); saveEst(); return clone(out) },
     async estDeleteMov(m) { const e = loadEst(); e.movs = e.movs.filter((x) => (m.lote ? x.lote !== m.lote : x.id !== m.id)); saveEst() },
     async estNovaContagem(corte) { const e = loadEst(); const c = { id: uid(), corte, status: 'aberta', created_at: new Date().toISOString() }; e.contagens.push(c); saveEst(); return clone(c) },
