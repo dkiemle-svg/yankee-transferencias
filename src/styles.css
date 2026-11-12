@@ -661,3 +661,4 @@ tr.est-fora td { background: color-mix(in srgb, var(--danger) 6%, var(--surface)
   .row-2 { grid-template-columns: 1fr; }
 }
 .pi-estoque { background: color-mix(in srgb, var(--st-warn) 16%, transparent); color: var(--st-warn); }
+.dre-total { font-size: 11.5px; margin-left: 4px; white-space: nowrap; }
