@@ -648,18 +648,23 @@ function Dre({ ctx }) {
       </div>
       <div className="table-wrap" style={{ borderTop: 0 }}>
         <table className="data fin-dre">
-          <thead><tr><th>Linha</th><th className="num">Já pago</th><th className="num">A pagar</th><th className="num">Total do mês</th><th className="num">% receita</th></tr></thead>
+          <thead><tr><th>Linha</th><th className="num">Atual <span className="muted">(total do mês)</span></th><th className="num hide-sm">A pagar</th><th className="num">% receita</th></tr></thead>
           <tbody>
             {d.linhas.map((l) => {
               const s = l.sinal || 1
               const isTot = l.tipo === 'tot'
+              const atual = isTot ? l.pago : s * (l.pago || 0)
+              const total = isTot ? l.total : s * (l.total || 0)
+              const vazio = !isTot && !l.total
               return (
                 <tr key={l.nome} className={`${l.tipo} ${l.destaque ? 'destaque' : ''}`}>
                   <td>{l.nome}</td>
-                  <td className="num">{isTot ? '' : l.pago ? fmt(s * l.pago) : <span className="muted">—</span>}</td>
-                  <td className="num muted">{isTot ? '' : l.aberto ? fmt(s * l.aberto) : '—'}</td>
-                  <td className={`num ${isTot && l.total < 0 ? 'txt-danger' : ''}`}>{isTot || l.total ? fmt(isTot ? l.total : s * l.total) : <span className="muted">—</span>}</td>
-                  <td className="num muted">{d.base && Math.abs(l.total) > 0.004 ? pct((isTot ? l.total : s * l.total) / d.base) : '—'}</td>
+                  <td className="num">{vazio ? <span className="muted">—</span> : <>
+                    <span className={isTot && atual < 0 ? 'txt-danger' : ''}>{fmt(atual)}</span>
+                    {Math.abs(total - atual) > 0.004 && <small className={`dre-total ${isTot && total < 0 ? 'txt-danger' : 'muted'}`}> ({fmt(total)})</small>}
+                  </>}</td>
+                  <td className="num muted hide-sm">{isTot ? '' : l.aberto ? fmt(s * l.aberto) : '—'}</td>
+                  <td className="num muted">{d.base && Math.abs(atual) > 0.004 ? pct(atual / d.base) : '—'}{d.base && Math.abs(total - atual) > 0.004 && Math.abs(total) > 0.004 ? <small> ({pct(total / d.base)})</small> : null}</td>
                 </tr>
               )
             })}
@@ -667,7 +672,7 @@ function Dre({ ctx }) {
         </table>
       </div>
       <p className="hint" style={{ padding: '0 16px 16px', margin: 0 }}>
-        Cada despesa aparece separada entre o que já foi pago e o que ainda está a pagar; os resultados usam o total do mês. CMV no mês: <b>{pct(d.cmvPct)}</b> da receita bruta.
+        Cada linha mostra o valor atual (despesas já pagas e vendas até hoje) e, entre parênteses, o total previsto do mês com o que ainda está a pagar. CMV no mês: <b>{pct(d.cmvPct)}</b> da receita bruta.
         A competência dos boletos do 3LM ainda é a data de vencimento, então o CMV pode incluir compras do mês anterior. Pessoal, aluguel e energia entram quando forem cadastrados em Custos fixos.
       </p>
     </div>
